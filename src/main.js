@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import {
   CATEGORIES, classify, tleInfo, orbitRegime, makeSatrec, stateAt, eciToLatLngAlt,
   orbitPath, observerGeo, lookAnglesFromLatLngAlt, predictPasses, compass, gstime,
-  EARTH_RADIUS_KM, GLOBE_RADIUS,
+  EARTH_RADIUS_KM, GLOBE_RADIUS, toGlobeXYZ,
 } from './orbit.js';
 import { createPointLayer, hexToRgb } from './pointLayer.js';
 import { KesslerSim } from './kessler.js';
@@ -14,6 +14,8 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 const fmt = (n, d = 0) => Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
 const DEFAULT_OBSERVER = { lat: 43.7286, lng: -79.6066, label: 'Humber College, Toronto' };
 const OVERVIEW_POV = { altitude: 3.2 };
+// High-res satellite imagery that streams in sharper tiles as you zoom.
+const TILE_URL = (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${l}/${y}/${x}`;
 const FOCUS_FLY_MS = 1600;
 
 // --- App state -------------------------------------------------------------
@@ -22,6 +24,7 @@ const state = {
   geo: null, // Float32Array lat,lng,altKm per sat (latest from worker)
   simTime: Date.now(),
   speed: 1,
+  live: true, // locked to the real clock (until the user pauses or fast-forwards)
   mode: 'home',
   selected: null,
   selectedRec: null,
@@ -57,6 +60,11 @@ const globe = new Globe($('globe'))
   .htmlAltitude((d) => d.alt ?? 0.003)
   .htmlTransitionDuration(0)
   .pointOfView({ lat: 25, lng: -60, altitude: 4.2 });
+
+// Use streamed tiles if the tile server answers; otherwise keep the bundled image.
+fetch(TILE_URL(0, 0, 0), { mode: 'cors' })
+  .then((r) => { if (r.ok) globe.globeTileEngineUrl(TILE_URL).globeTileEngineMaxLevel(17); })
+  .catch(() => {});
 
 function observerPin() {
   const el = document.createElement('div');
@@ -104,14 +112,56 @@ async function init() {
   worker.postMessage({ type: 'init', sats: state.sats.map(({ l1, l2 }) => ({ l1, l2 })) });
 }
 
+// The worker only refreshes positions a few times a second. To keep motion
+// smooth, every frame we extrapolate each dot along its latest movement.
+const track = { prev: null, prevT: 0, cur: null, curT: 0 };
+
+function renderPositions() {
+  const { prev, cur } = track;
+  if (!prev || !cur) return;
+  const span = track.curT - track.prevT;
+  let k = span > 0 ? (state.simTime - track.curT) / span : 0;
+  if (!(k > 0) || k > 3) k = Math.max(0, Math.min(k || 0, 3));
+  const out = satLayer.position.array;
+  for (let j = 0; j < cur.length; j++) out[j] = cur[j] + (cur[j] - prev[j]) * k;
+  satLayer.position.needsUpdate = true;
+}
+
+// The object the camera is following gets its exact orbit position every
+// frame (one SGP4 call), so the follow-cam glides instead of stepping.
+const pinned = {};
+function pinExact(i, rec) {
+  if (i === null || !rec || !satLayer.position) return;
+  const date = new Date(state.simTime);
+  const pv = stateAt(rec, date);
+  if (!pv) return;
+  const g = eciToLatLngAlt(pv.position, gstime(date));
+  toGlobeXYZ(g.lat, g.lng, g.alt, pinned);
+  const a = satLayer.position.array;
+  a[i * 3] = pinned.x; a[i * 3 + 1] = pinned.y; a[i * 3 + 2] = pinned.z;
+  satLayer.position.needsUpdate = true;
+}
+
+// Lat/lng/alt of a dot exactly where it's drawn this frame.
+function renderedLatLngAlt(i) {
+  if (!latLngAlt(i)) return null;
+  const a = satLayer.position.array;
+  const x = a[i * 3], y = a[i * 3 + 1], z = a[i * 3 + 2];
+  const r = Math.hypot(x, y, z);
+  let lng = 90 - (Math.atan2(z, x) * 180) / Math.PI;
+  if (lng > 180) lng -= 360;
+  return { lat: 90 - (Math.acos(y / r) * 180) / Math.PI, lng, alt: (r / GLOBE_RADIUS - 1) * EARTH_RADIUS_KM };
+}
+
 worker.onmessage = ({ data }) => {
   if (data.type === 'ready') {
     workerBusy = false;
     return;
   }
   if (data.type === 'positions') {
-    satLayer.position.array.set(data.xyz);
-    satLayer.position.needsUpdate = true;
+    track.prev = track.cur; track.prevT = track.curT;
+    track.cur = data.xyz; track.curT = data.time;
+    if (!track.prev) { satLayer.position.array.set(data.xyz); satLayer.position.needsUpdate = true; }
     satLayer.geometry.setDrawRange(0, state.sats.length);
     state.geo = data.geo;
     workerBusy = false;
@@ -301,7 +351,7 @@ function updateSatMarker() {
   // object's orbit, which the worker keeps computing).
   const crash = state.mode === 'kessler' && state.crashSite !== null;
   const i = crash ? state.crashSite : state.selected;
-  const g = i !== null && (crash || !state.destroyed.has(i)) ? latLngAlt(i) : null;
+  const g = i !== null && (crash || !state.destroyed.has(i)) ? renderedLatLngAlt(i) : null;
   if (g) {
     const name = crash ? `💥 Debris from ${state.sats[i].name}` : state.sats[i].name;
     if (marker?.i !== i || marker.name !== name) marker = { kind: 'sat', i, name };
@@ -690,6 +740,7 @@ function startCollision() {
   if (state.mode !== 'kessler') setMode('kessler');
   deselect();
   state.crashSite = i;
+  state.crashRec = makeSatrec(state.sats[i].l1, state.sats[i].l2);
   toast(`💥 <b>${esc(state.sats[i].name)}</b> was destroyed. Following the debris…`);
   focusCrash();
   updateSatMarker();
@@ -765,13 +816,15 @@ function wirePanel(el) {
 
 // --- Time controls -------------------------------------------------------------
 function setSpeed(speed) {
+  if (speed !== state.speed) state.live = false;
   state.speed = speed;
   document.querySelectorAll('#speeds [data-speed]').forEach((b) => b.classList.toggle('active', +b.dataset.speed === speed));
 }
 document.querySelectorAll('#speeds [data-speed]').forEach((b) => { b.onclick = () => setSpeed(+b.dataset.speed); });
 $('now-btn').onclick = () => {
-  state.simTime = Date.now();
   setSpeed(1);
+  state.simTime = Date.now();
+  state.live = true;
   if (state.mode === 'above') { computePasses(); renderPanel(); }
 };
 
@@ -783,7 +836,8 @@ function frame(now) {
   const dtReal = Math.min(now - lastFrame, 100);
   lastFrame = now;
   const dtSim = (dtReal / 1000) * state.speed;
-  state.simTime += dtSim * 1000;
+  // In live mode follow the real clock exactly, even if frames are slow.
+  state.simTime = state.live ? Date.now() : state.simTime + dtSim * 1000;
 
   if (!workerBusy && state.sats.length) {
     workerBusy = true;
@@ -795,12 +849,16 @@ function frame(now) {
     chainReaction(dtSim);
   }
 
+  renderPositions();
+  if (state.mode === 'kessler' && state.crashSite !== null) pinExact(state.crashSite, state.crashRec);
+  else if (state.selected !== null) pinExact(state.selected, state.selectedRec);
+
   if (state.selected !== null) {
-    const g = latLngAlt(state.selected);
+    const g = renderedLatLngAlt(state.selected);
     if (g && state.follow) globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: globe.pointOfView().altitude });
   }
   if (state.mode === 'kessler' && state.crashSite !== null) {
-    const g = latLngAlt(state.crashSite);
+    const g = renderedLatLngAlt(state.crashSite);
     if (g && state.followCrash) globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: globe.pointOfView().altitude });
   }
   if (state.selected !== null || state.crashSite !== null) updateSatMarker();
@@ -815,7 +873,7 @@ function frame(now) {
 function updateUi(now) {
   const t = new Date(state.simTime);
   $('clock').textContent = t.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  const live = state.speed === 1 && Math.abs(state.simTime - Date.now()) < 5000;
+  const live = state.live;
   $('live-badge').textContent = live ? '● LIVE' : state.speed === 0 ? '⏸ PAUSED' : '⏩ SIMULATED';
   $('live-badge').classList.toggle('off', !live);
 
