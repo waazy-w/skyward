@@ -21,6 +21,8 @@ const OVERVIEW_POV = { altitude: 3.2 };
 const TILE_URL = (x, y, l) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${l}/${y}/${x}`;
 const TILE_FADE_MS = 450;
 const FOCUS_FLY_MS = 1600;
+// How often the orbit line is cut to the object's position (more often when time runs fast).
+const pathRedrawMs = () => (Math.abs(state.speed) > 1 ? 30 : 100);
 const MAX_KESSLER_JUMP_SEC = 6 * 3600; // bigger time jumps reset the crash sim
 const ISS_RE = /^ISS \(ZARYA\)/;
 // Friendly names people search for that differ from the catalog names.
@@ -551,8 +553,6 @@ function latLngAlt(i) {
   return { lat: state.geo[i * 3], lng: state.geo[i * 3 + 1], alt: state.geo[i * 3 + 2] };
 }
 
-// The orbit line covers one lap from `pathFrom`; redraw when time leaves that window.
-let pathFrom = 0;
 let lastPathAt = 0;
 // The orbit line belongs to the selected object, or to the crash target while
 // the camera swoops in on it.
@@ -572,16 +572,10 @@ function updateOrbitPath() {
   }
   const s = state.sats[i];
   s.info ??= tleInfo(s.l1, s.l2);
-  pathFrom = state.simTime;
-  const pts = orbitPath(rec, new Date(state.simTime), s.info.periodMin);
+  // Starts exactly at the object and runs ahead of it (most of one lap), so
+  // there's never a trail behind it. Redrawn as it moves (see frame()).
+  const pts = orbitPath(rec, new Date(state.simTime), s.info.periodMin * 0.92, 140);
   globe.pathsData([{ pts, color: ['rgba(255,255,255,0.9)', 'rgba(90,200,250,0.15)'] }]);
-}
-
-function orbitPathStale() {
-  const [i] = pathOwner();
-  if (i === null || state.destroyed.has(i) || !state.sats[i].info) return false;
-  const period = state.sats[i].info.periodMin * 60000;
-  return state.simTime < pathFrom || state.simTime > pathFrom + period * 0.5;
 }
 
 // The labelled ring around the selected object, plus the observer pin.
@@ -1320,6 +1314,7 @@ function frame(now) {
 
   updateCamera(now);
   if (state.selected !== null || state.crashSite !== null) updateSatMarker();
+  if (dtSim !== 0 && now - lastPathAt > pathRedrawMs() && pathOwner()[0] !== null) updateOrbitPath();
   flashes.update(now);
   fadeTiles(now);
 
@@ -1356,7 +1351,6 @@ function updateUi(now) {
       if (next && $('pass-countdown')) $('pass-countdown').textContent = countdown(next.visStart - state.simTime);
     }
   }
-  if (state.selected !== null && (orbitPathStale() || (state.speed > 1 && now - lastPathAt > 2000))) updateOrbitPath();
 
   if (state.mode === 'above') {
     computeAbove();
