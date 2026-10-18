@@ -378,19 +378,22 @@ function restyle() {
   const crashView = state.mode === 'kessler' && (kessler.count > 0 || state.crashSite !== null);
   eventSet = state.mode === 'kessler' && state.event ? eventSet ?? new Set(state.sats.flatMap((s, k) => (REAL_EVENTS[state.event].re.test(s.name) ? [k] : []))) : null;
   document.body.classList.toggle('focused', focused || crashView);
+  // A small group (GPS, stations) can have big dots; thousands of Starlinks can't.
+  const soloFew = state.solo !== null && state.sats.filter((s) => s.cat === state.solo).length < 1500;
   for (let i = 0; i < state.sats.length; i++) {
     const s = state.sats[i];
     let rgb = catRgb[s.cat];
     let sz = CATEGORIES[s.cat].size;
-    if (state.solo === s.cat) sz = Math.max(sz * 3, 6); // big enough to see from far out
+    if (state.solo === s.cat) sz = soloFew ? Math.max(sz * 5, 12) : Math.max(sz * 2.5, 4); // stand out from the stars far out
     if (isHidden(s.cat) || state.destroyed.has(i)) sz = 0;
     else if (i === state.selected || (i === state.crashSite && !state.destroyed.has(i))) { rgb = [1, 1, 1]; sz = 10; }
     else if (eventSet) {
       if (eventSet.has(i)) { rgb = [1, 0.5, 0.42]; sz = 4.5; }
       else { rgb = rgb.map((v) => v * 0.15); sz *= 0.8; }
     }
-    else if (focused) { rgb = rgb.map((v) => v * 0.22); sz *= 0.8; }
-    else if (crashView) { rgb = rgb.map((v) => v * 0.3); sz *= 0.8; }
+    // The one type you filtered to stays bright, even in focus and crash views.
+    else if (focused && !state.solo) { rgb = rgb.map((v) => v * 0.22); sz *= 0.8; }
+    else if (crashView && !state.solo) { rgb = rgb.map((v) => v * 0.3); sz *= 0.8; }
     else if (aboveSet) {
       if (aboveSet.has(i)) sz = Math.max(sz * 1.8, 3.5);
       else rgb = rgb.map((v) => v * 0.25);
@@ -429,15 +432,22 @@ function setSolo(cat) {
   restyle();
   if (state.selected !== null) updateOrbitPath();
   if (state.mode === 'above') { computeAbove(); refreshAbovePanel(); }
-  if (state.mode !== 'home' || !state.geo) return;
-  let altitude = OVERVIEW_POV.altitude;
-  if (cat) {
-    const alts = [];
-    for (let i = 0; i < state.sats.length; i++) if (state.sats[i].cat === cat && !Number.isNaN(state.geo[i * 3])) alts.push(state.geo[i * 3 + 2]);
-    alts.sort((a, b) => a - b);
-    const shell = 1 + (alts[Math.floor(alts.length * 0.9)] || 0) / EARTH_RADIUS_KM; // 90th percentile radius
-    altitude = Math.min(14, Math.max(2.4, shell * 2 - 1));
+  if (!state.geo || cinematic) return;
+  if (!cat) {
+    // Back to everything: only the overview resets the zoom.
+    if (state.mode === 'home') globe.pointOfView({ ...globe.pointOfView(), ...OVERVIEW_POV }, 1400);
+    return;
   }
+  // Zoom out far enough to see the whole shell this type flies in.
+  const alts = [];
+  for (let i = 0; i < state.sats.length; i++) if (state.sats[i].cat === cat && !Number.isNaN(state.geo[i * 3])) alts.push(state.geo[i * 3 + 2]);
+  alts.sort((a, b) => a - b);
+  const shell = 1 + (alts[Math.floor(alts.length * 0.9)] || 0) / EARTH_RADIUS_KM; // 90th percentile radius
+  const altitude = Math.min(14, Math.max(2.4, shell * 2 - 1));
+  // Anywhere else, only zoom when we're too close to see them (e.g. riding
+  // along with the ISS, then picking GPS). Stop following so it sticks.
+  if (state.mode !== 'home' && globe.pointOfView().altitude >= altitude * 0.8) return;
+  if (cam.target) stopFollow();
   globe.pointOfView({ ...globe.pointOfView(), altitude }, 1400);
 }
 

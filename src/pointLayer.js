@@ -12,6 +12,9 @@ const vertexShader = `
   uniform vec3 sunDir;
   varying vec3 vColor;
   void main() {
+    // Hidden dots (size 0) would still be drawn 1px wide by many GPUs:
+    // move them outside the screen instead.
+    if (size <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
     // Inside Earth's (cylindrical) shadow? Then the object isn't lit: draw it dim.
     // Big dots (the selected object) always stay bright.
     float d = dot(position, sunDir);
