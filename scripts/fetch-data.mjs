@@ -29,7 +29,7 @@ const all = [];
 for (const { group, kind } of GROUPS) {
   const url = `https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=tle`;
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'OrbitWatch hackathon project' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'Skyward hackathon project' } });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const sats = parseTle(await res.text(), kind);
     let added = 0;

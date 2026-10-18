@@ -1,6 +1,6 @@
-# 🛰️ OrbitWatch
+# 🛰️ Skyward
 
-**Every tracked object in Earth orbit, live on a 3D globe.** See what's flying over your head right now, and what would happen if two satellites collided.
+**See every satellite above you, and what happens if they collide.** Every tracked object in Earth orbit, live on a 3D globe.
 
 Built solo at **Hack the Skies 2026**.
 
