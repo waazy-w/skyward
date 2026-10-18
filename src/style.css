@@ -118,6 +118,7 @@ h1, h2, h3, p { margin: 0; }
 .list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
 .list li.click { cursor: pointer; }
 .list li.click:hover { background: rgba(90, 200, 250, 0.1); }
+.list li.on { background: rgba(255, 107, 107, 0.16); box-shadow: inset 3px 0 0 var(--danger); }
 .list .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .list .meta { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: rgba(255, 209, 102, 0.15); color: var(--gold); white-space: nowrap; }

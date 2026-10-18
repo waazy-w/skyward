@@ -47,7 +47,25 @@ const state = {
   chain: true,
   crashSite: null, // index of the smashed object the camera tracks in Kessler mode
   crashRec: null,
+  event: null, // key of a real debris event whose cloud is highlighted (Kessler tab)
 };
+
+// Real break-ups whose leftover debris is in the data.
+const REAL_EVENTS = {
+  fengyun: {
+    title: '2007 · Fengyun-1C missile test', re: /^FENGYUN 1C DEB/, total: '3,500+',
+    story: 'China destroyed one of its own old weather satellites with a missile, 865 km up. It is the worst debris event ever. That orbit is so high the pieces will stay up for decades.',
+  },
+  iridium: {
+    title: '2009 · Iridium 33 × Cosmos 2251', re: /^(IRIDIUM 33|COSMOS 2251) DEB/, total: '2,300+',
+    story: 'The first accidental crash between two satellites: a working American satellite hit a dead Russian one at 11.7 km/s over Siberia. Nobody saw it coming.',
+  },
+  cosmos1408: {
+    title: '2021 · Cosmos 1408 missile test', re: /^COSMOS 1408 DEB/, total: '1,500+',
+    story: 'Russia blew up a dead satellite with a missile and the ISS crew had to shelter in their spacecraft. It was low enough that air drag has pulled almost all of it down since.',
+  },
+};
+let eventSet = null; // indices of the highlighted event's debris
 
 const isHidden = (cat) => state.solo !== null && cat !== state.solo;
 
@@ -358,6 +376,7 @@ function restyle() {
   const focused = state.mode === 'sat' && state.selected !== null;
   // During a crash, fade everything else so the red junk stands out.
   const crashView = state.mode === 'kessler' && (kessler.count > 0 || state.crashSite !== null);
+  eventSet = state.mode === 'kessler' && state.event ? eventSet ?? new Set(state.sats.flatMap((s, k) => (REAL_EVENTS[state.event].re.test(s.name) ? [k] : []))) : null;
   document.body.classList.toggle('focused', focused || crashView);
   for (let i = 0; i < state.sats.length; i++) {
     const s = state.sats[i];
@@ -366,6 +385,10 @@ function restyle() {
     if (state.solo === s.cat) sz = Math.max(sz * 3, 6); // big enough to see from far out
     if (isHidden(s.cat) || state.destroyed.has(i)) sz = 0;
     else if (i === state.selected || (i === state.crashSite && !state.destroyed.has(i))) { rgb = [1, 1, 1]; sz = 10; }
+    else if (eventSet) {
+      if (eventSet.has(i)) { rgb = [1, 0.5, 0.42]; sz = 4.5; }
+      else { rgb = rgb.map((v) => v * 0.15); sz *= 0.8; }
+    }
     else if (focused) { rgb = rgb.map((v) => v * 0.22); sz *= 0.8; }
     else if (crashView) { rgb = rgb.map((v) => v * 0.3); sz *= 0.8; }
     else if (aboveSet) {
@@ -673,6 +696,7 @@ function setMode(mode) {
   if (mode !== 'sat' && isFollowing('sat')) stopFollow();
   if (mode !== 'kessler' && isFollowing('crash')) stopFollow();
   if (prev === 'kessler' && mode !== 'kessler' && state.autoSpeed) goLive();
+  if (mode !== 'kessler') state.event = null;
   if (mode === 'home' || mode === 'above') deselect();
   if (mode === 'home' && prev !== 'home') {
     // Back to the big picture: zoom out and let the Earth spin again.
@@ -1021,16 +1045,35 @@ function kesslerPanel() {
       ${running ? '<button class="btn" data-act="reset">↺ Reset</button>' : ''}
     </div>
     <p class="muted small">Tip: click any satellite first to choose what gets hit.</p>
-    <details>
+    <details ${state.event ? 'open' : ''}>
       <summary>Has this happened for real?</summary>
       <ul class="list small">
-        <li><span class="name">2007 · Fengyun-1C missile test</span><span class="meta">3,500+ pieces</span></li>
-        <li><span class="name">2009 · Iridium 33 × Cosmos 2251</span><span class="meta">2,300+ pieces</span></li>
-        <li><span class="name">2021 · Cosmos 1408 missile test</span><span class="meta">1,500+ pieces</span></li>
+        ${Object.entries(REAL_EVENTS).map(([k, e]) => `<li class="click${state.event === k ? ' on' : ''}" data-event="${k}" role="button" tabindex="0"><span class="name">${e.title}</span><span class="meta">${e.total} pieces</span></li>`).join('')}
       </ul>
-      <p class="muted small">The red dots on the globe are what's left of these events today.</p>
+      ${state.event ? eventCard() : `<p class="muted small">Click one to light up what's left of it in orbit today.</p>`}
     </details>
     <p class="muted small">Sped up and exaggerated so you can see it happen. A real cascade would take years.</p>`;
+}
+
+function eventCard() {
+  const e = REAL_EVENTS[state.event];
+  const n = eventSet?.size ?? 0;
+  return `<div class="callout" style="--c:var(--danger)">${e.story}<br><br><b>${fmt(n)}</b> ${n === 1 ? 'piece is' : 'pieces are'} still being tracked in orbit today (out of ${e.total}). <span class="link" data-act="eventoff" role="button" tabindex="0">Show everything</span></div>`;
+}
+
+// Light up one real event's debris cloud and zoom out to see all of it.
+function showEvent(key) {
+  if (cinematic) return;
+  state.event = state.event === key ? null : key;
+  eventSet = null;
+  if (state.event) {
+    deselect();
+    if (isFollowing('crash')) stopFollow();
+    globe.pointOfView({ ...globe.pointOfView(), altitude: 2.6 }, 1400);
+  }
+  restyle();
+  renderPanel();
+  $('side').querySelector('details .callout')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 let kesslerStart = null;
@@ -1147,6 +1190,7 @@ function startCollision() {
   if (!g) { toast("Can't find that satellite's position right now. Try another one."); return; }
 
   if (state.mode !== 'kessler') setMode('kessler');
+  state.event = null;
   deselect();
   state.crashSite = i;
   state.crashRec = makeSatrec(state.sats[i].l1, state.sats[i].l2);
@@ -1232,11 +1276,13 @@ function wirePanel(el) {
       chain: () => { state.chain = b.checked; },
       locate: () => requestLocation(true),
       share: () => shareLink(),
+      eventoff: () => showEvent(state.event),
     }[act];
     if (act === 'chain') b.onchange = handler;
     else b.onclick = () => { sfx.click(); handler(); };
   });
   el.querySelectorAll('[data-sel]').forEach((li) => activate(li, () => select(+li.dataset.sel)));
+  el.querySelectorAll('[data-event]').forEach((li) => activate(li, () => { sfx.click(); showEvent(li.dataset.event); }));
   refreshFollowButtons();
 }
 

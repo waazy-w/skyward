@@ -14,6 +14,7 @@ Built solo for **Hack the Skies 2026**.
 - 🔭 **Above me:** see what's over your head right now, and when you can spot the ISS with your own eyes.
 - 🛰️ **Click any dot** to fly to it and see its height, speed, orbit and next pass over you.
 - 💥 **Smash a satellite** and watch the debris spread around the planet and hit other satellites (the Kessler syndrome).
+- 📜 **See real space disasters:** light up what's left of the 2007 Fengyun-1C missile test, the 2009 Iridium–Cosmos crash and the 2021 Cosmos 1408 test.
 - ⏩ **Speed up time**, filter by type (Starlink, GPS, debris…) and share a link to any satellite.
 
 ## How it works
