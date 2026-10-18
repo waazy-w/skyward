@@ -87,7 +87,7 @@ const globe = new Globe($('globe'))
   .ringMaxRadius((d) => d.radius)
   .ringPropagationSpeed((d) => d.speed ?? 4)
   .ringRepeatPeriod((d) => d.repeat ?? 600)
-  .htmlElement((d) => (d.kind === 'sat' ? satMarker(d) : observerPin()))
+  .htmlElement((d) => (d.kind === 'sat' ? satMarker(d) : d.kind === 'tag' ? tagMarker(d) : observerPin()))
   .htmlAltitude((d) => d.alt ?? 0.003)
   .htmlTransitionDuration(0)
   // Hide labels when their object is behind the Earth.
@@ -158,6 +158,14 @@ function satMarker(d) {
   const el = document.createElement('div');
   el.className = `sat-marker${d.danger ? ' danger' : ''}`;
   el.innerHTML = `<span class="ring"></span><span class="label">${esc(d.name)}</span>`;
+  return el;
+}
+
+// A plain name tag (no ring), used to name the space stations.
+function tagMarker(d) {
+  const el = document.createElement('div');
+  el.className = 'sat-marker tag';
+  el.innerHTML = `<span class="label">${esc(d.name)}</span>`;
   return el;
 }
 
@@ -408,6 +416,8 @@ function restyle() {
 function buildLegend() {
   const counts = {};
   for (const s of state.sats) counts[s.cat] = (counts[s.cat] || 0) + 1;
+  // Station modules are tracked one by one, but they make up just two stations.
+  counts.station = new Set(state.sats.filter((s) => s.cat === 'station').map((s) => s.name.split(' (')[0])).size;
   $('total').textContent = fmt(state.sats.length);
   $('legend-list').innerHTML = Object.entries(CATEGORIES)
     .map(([k, c]) => `<li data-cat="${k}" role="button" tabindex="0" aria-pressed="${state.solo === k}" class="${isHidden(k) ? 'off' : ''}${state.solo === k ? ' solo' : ''}" style="--c:${c.color}"><span class="dot"></span>${c.label}<span class="count">${fmt(counts[k] || 0)}</span></li>`)
@@ -415,7 +425,9 @@ function buildLegend() {
   $('legend-list').querySelectorAll('li').forEach((li) => {
     activate(li, () => setSolo(state.solo === li.dataset.cat ? null : li.dataset.cat));
   });
-  $('legend-hint').innerHTML = state.solo
+  $('legend-hint').innerHTML = state.solo === 'station'
+    ? `Showing the 2 space stations: the ISS and China's Tiangong. Each is built from modules that are tracked separately. <button class="link" id="show-all">Show all</button>`
+    : state.solo
     ? `Showing only ${CATEGORIES[state.solo].label}. <button class="link" id="show-all">Show all</button>`
     : 'Click a category to show only that type.';
   if ($('show-all')) $('show-all').onclick = () => setSolo(null);
@@ -430,6 +442,7 @@ function setSolo(cat) {
   state.solo = cat;
   buildLegend();
   restyle();
+  updateSatMarker();
   if (state.selected !== null) updateOrbitPath();
   if (state.mode === 'above') { computeAbove(); refreshAbovePanel(); }
   if (!state.geo || cinematic) return;
@@ -614,6 +627,7 @@ function updateOrbitPath() {
 // The labelled ring around the selected object, plus the observer pin.
 // Data objects are reused between frames so globe.gl just moves the element.
 let marker = null;
+let stationTags = null;
 let observerDatum = null;
 function updateSatMarker() {
   const items = [];
@@ -635,6 +649,18 @@ function updateSatMarker() {
     items.push(marker);
   } else {
     marker = null;
+  }
+  // Filtering to space stations: name the two stations so their clustered
+  // module dots make sense.
+  if (state.solo === 'station') {
+    stationTags ??= [['ISS (ZARYA)', 'ISS · International Space Station'], ['CSS (TIANHE)', "Tiangong · China's space station"]]
+      .map(([n, name]) => ({ kind: 'tag', i: state.sats.findIndex((s) => s.name === n), name }))
+      .filter((t) => t.i >= 0);
+    for (const t of stationTags) {
+      if (t.i === i) continue; // already has the selection marker
+      const p = renderedLatLngAlt(t.i);
+      if (p) items.push(Object.assign(t, { lat: p.lat, lng: p.lng, alt: p.alt / EARTH_RADIUS_KM }));
+    }
   }
   globe.htmlElementsData(items);
 }
@@ -1399,7 +1425,7 @@ function frame(now) {
   }
 
   updateCamera(now);
-  if (state.selected !== null || state.crashSite !== null) updateSatMarker();
+  if (state.selected !== null || state.crashSite !== null || state.solo === 'station') updateSatMarker();
   if (dtSim !== 0 && now - lastPathAt > pathRedrawMs() && pathOwner()[0] !== null) updateOrbitPath();
   flashes.update(now);
   fadeTiles(now);

@@ -319,3 +319,4 @@ kbd {
 .neighbour:hover { border-color: var(--accent); background: rgba(90, 200, 250, 0.08); }
 .neighbour .k { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
 .neighbour .dot { display: inline-block; vertical-align: middle; }
+.sat-marker.tag .label { left: 12px; top: -11px; font-size: 12px; border-color: rgba(255, 209, 102, 0.5); }
