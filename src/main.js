@@ -13,6 +13,8 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const fmt = (n, d = 0) => Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
 const DEFAULT_OBSERVER = { lat: 43.7286, lng: -79.6066, label: 'Humber College, Toronto' };
+const OVERVIEW_POV = { altitude: 3.2 };
+const FOCUS_FLY_MS = 1600;
 
 // --- App state -------------------------------------------------------------
 const state = {
@@ -49,21 +51,30 @@ const globe = new Globe($('globe'))
   .ringMaxRadius((d) => d.radius)
   .ringPropagationSpeed(4)
   .ringRepeatPeriod(600)
-  .htmlElement(() => {
-    const el = document.createElement('div');
-    el.className = 'observer-pin';
-    el.title = 'You are here';
-    return el;
-  })
-  .htmlAltitude(0.003)
+  .htmlElement((d) => (d.kind === 'sat' ? satMarker(d) : observerPin()))
+  .htmlAltitude((d) => d.alt ?? 0.003)
   .pointOfView({ lat: 25, lng: -60, altitude: 4.2 });
+
+function observerPin() {
+  const el = document.createElement('div');
+  el.className = 'observer-pin';
+  el.title = 'You are here';
+  return el;
+}
+
+function satMarker(d) {
+  const el = document.createElement('div');
+  el.className = 'sat-marker';
+  el.innerHTML = `<span class="ring"></span><span class="label">${esc(d.name)}</span>`;
+  return el;
+}
 
 const controls = globe.controls();
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.35;
-controls.minDistance = GLOBE_RADIUS * 1.15;
+controls.minDistance = GLOBE_RADIUS * 1.1;
 controls.maxDistance = GLOBE_RADIUS * 12;
-controls.addEventListener('start', () => { controls.autoRotate = false; state.follow = false; });
+controls.addEventListener('start', () => { controls.autoRotate = false; });
 
 const satLayer = createPointLayer(1);
 const kessler = new KesslerSim();
@@ -101,7 +112,7 @@ worker.onmessage = ({ data }) => {
     satLayer.geometry.setDrawRange(0, state.sats.length);
     state.geo = data.geo;
     workerBusy = false;
-    if ($('loading').classList.contains('done') === false) {
+    if (!$('loading').classList.contains('done')) {
       $('loading').classList.add('done');
       renderPanel();
     }
@@ -115,17 +126,18 @@ function restyle() {
   const { color, size } = satLayer;
   if (!color) return;
   const aboveSet = state.mode === 'above' ? new Set(state.above) : null;
+  const focused = state.mode === 'sat' && state.selected !== null;
   for (let i = 0; i < state.sats.length; i++) {
     const s = state.sats[i];
-    const cat = CATEGORIES[s.cat];
     let rgb = catRgb[s.cat];
-    let sz = cat.size;
+    let sz = CATEGORIES[s.cat].size;
     if (state.hidden.has(s.cat) || state.destroyed.has(i)) sz = 0;
+    else if (i === state.selected) { rgb = [1, 1, 1]; sz = 10; }
+    else if (focused) { rgb = rgb.map((v) => v * 0.22); sz *= 0.8; }
     else if (aboveSet) {
       if (aboveSet.has(i)) sz = Math.max(sz * 1.8, 3.5);
       else rgb = rgb.map((v) => v * 0.25);
     }
-    if (i === state.selected && sz > 0) { rgb = [1, 1, 1]; sz = 9; }
     color.array.set(rgb, i * 3);
     size.array[i] = sz;
   }
@@ -138,7 +150,7 @@ function buildLegend() {
   for (const s of state.sats) counts[s.cat] = (counts[s.cat] || 0) + 1;
   $('total').textContent = fmt(state.sats.length);
   $('legend-list').innerHTML = Object.entries(CATEGORIES)
-    .map(([k, c]) => `<li data-cat="${k}" style="--c:${c.color}"><span class="dot"></span>${c.label}<span class="count">${fmt(counts[k] || 0)}</span></li>`)
+    .map(([k, c]) => `<li data-cat="${k}" class="${state.hidden.has(k) ? 'off' : ''}" style="--c:${c.color}"><span class="dot"></span>${c.label}<span class="count">${fmt(counts[k] || 0)}</span></li>`)
     .join('');
   $('legend-list').querySelectorAll('li').forEach((li) => {
     li.onclick = () => {
@@ -149,7 +161,7 @@ function buildLegend() {
     };
   });
   const hrs = Math.round((Date.now() - fetchedAt) / 3600000);
-  $('data-age').textContent = `Orbit data from CelesTrak, updated ${hrs < 1 ? 'less than an hour' : hrs + 'h'} ago.`;
+  $('data-age').textContent = `Click a category to hide it. Data updated ${hrs < 1 ? 'under an hour' : hrs + 'h'} ago.`;
 }
 
 // --- Picking (hover + click) -------------------------------------------------
@@ -164,7 +176,8 @@ function pick(clientX, clientY) {
   const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
   const camera = globe.camera();
   raycaster.setFromCamera(ndc, camera);
-  raycaster.params.Points.threshold = camera.position.length() * 0.008;
+  // Pick tolerance shrinks as you zoom in, so crowded areas stay clickable.
+  raycaster.params.Points.threshold = Math.max(0.15, (camera.position.length() - GLOBE_RADIUS) * 0.01);
   const limit = raycaster.ray.intersectSphere(globeSphere, tmpVec) ? raycaster.ray.origin.distanceTo(tmpVec) : Infinity;
   let best = null;
   for (const h of raycaster.intersectObject(satLayer.points)) {
@@ -184,7 +197,11 @@ window.addEventListener('pointerup', (e) => {
   if (!downAt || e.target !== canvasEl()) return;
   const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
   downAt = null;
-  if (moved > 5) return;
+  if (moved > 5) {
+    // Dragging the globe takes the camera back from the follow-cam.
+    if (state.follow) { state.follow = false; refreshFollowButton(); }
+    return;
+  }
   const i = pick(e.clientX, e.clientY);
   if (i !== null) select(i);
 });
@@ -199,7 +216,7 @@ window.addEventListener('pointermove', (e) => {
     const i = pick(e.clientX, e.clientY);
     const tip = $('tooltip');
     canvasEl().style.cursor = i !== null ? 'pointer' : '';
-    if (i === null) { tip.hidden = true; return; }
+    if (i === null || i === state.selected) { tip.hidden = true; return; }
     const s = state.sats[i];
     tip.innerHTML = `<span class="dot" style="--c:${CATEGORIES[s.cat].color};display:inline-block;margin-right:6px"></span>${esc(s.name)}`;
     tip.style.left = `${e.clientX + 14}px`;
@@ -207,9 +224,14 @@ window.addEventListener('pointermove', (e) => {
     tip.hidden = false;
   });
 });
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && state.mode === 'sat') setMode('home');
+});
 
-// --- Selection -------------------------------------------------------------
-function select(i, { fly = true } = {}) {
+// --- Selection & focus ------------------------------------------------------
+let followTimer = null;
+
+function select(i) {
   state.selected = i;
   const s = state.sats[i];
   state.selectedRec = makeSatrec(s.l1, s.l2);
@@ -218,17 +240,25 @@ function select(i, { fly = true } = {}) {
     renderPanel();
   } else {
     setMode('sat');
+    focusOn(i);
   }
   updateOrbitPath();
+  updateSatMarker();
   restyle();
-  if (fly) flyTo(i);
 }
 
-function flyTo(i, ms = 1200) {
+// Fly the camera in close to the object, then lock on and follow it.
+function focusOn(i) {
   const g = latLngAlt(i);
   if (!g) return;
   controls.autoRotate = false;
-  globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: Math.max(1.6, g.alt / EARTH_RADIUS_KM + 1.4) }, ms);
+  state.follow = false;
+  clearTimeout(followTimer);
+  const altitude = g.alt / EARTH_RADIUS_KM + (g.alt > 5000 ? 1.2 : 0.45);
+  globe.pointOfView({ lat: g.lat, lng: g.lng, altitude }, FOCUS_FLY_MS);
+  followTimer = setTimeout(() => {
+    if (state.selected === i && state.mode === 'sat') { state.follow = true; refreshFollowButton(); }
+  }, FOCUS_FLY_MS + 50);
 }
 
 function latLngAlt(i) {
@@ -248,11 +278,36 @@ function updateOrbitPath() {
   globe.pathsData([{ pts, color: ['rgba(255,255,255,0.9)', 'rgba(90,200,250,0.15)'] }]);
 }
 
+// The labelled ring around the selected object, plus the observer pin.
+// Data objects are reused between frames so globe.gl just moves the element.
+let marker = null;
+let observerDatum = null;
+function updateSatMarker() {
+  const items = [];
+  if (state.mode === 'above' && state.observer) {
+    if (observerDatum?.lat !== state.observer.lat || observerDatum?.lng !== state.observer.lng)
+      observerDatum = { kind: 'obs', lat: state.observer.lat, lng: state.observer.lng };
+    items.push(observerDatum);
+  }
+  const i = state.selected;
+  const g = i !== null && !state.destroyed.has(i) ? latLngAlt(i) : null;
+  if (g) {
+    if (marker?.i !== i) marker = { kind: 'sat', i, name: state.sats[i].name };
+    Object.assign(marker, { lat: g.lat, lng: g.lng, alt: g.alt / EARTH_RADIUS_KM });
+    items.push(marker);
+  } else {
+    marker = null;
+  }
+  globe.htmlElementsData(items);
+}
+
 function deselect() {
   state.selected = null;
   state.selectedRec = null;
   state.follow = false;
+  clearTimeout(followTimer);
   globe.pathsData([]);
+  updateSatMarker();
   restyle();
 }
 
@@ -291,12 +346,19 @@ document.querySelectorAll('.modes button').forEach((b) => { b.onclick = () => se
 function setMode(mode) {
   const prev = state.mode;
   state.mode = mode;
+  document.body.classList.toggle('focused', mode === 'sat');
   document.querySelectorAll('.modes button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
   if (mode !== 'sat') state.follow = false;
-  if ((mode === 'home' && prev !== 'home') || mode === 'above') deselect();
-  if (mode === 'above') startAbove();
-  else globe.htmlElementsData([]);
+  if (prev === 'sat' && mode === 'home') {
+    deselect();
+    controls.autoRotate = true;
+    globe.pointOfView({ ...globe.pointOfView(), ...OVERVIEW_POV }, 1200);
+  } else if (mode === 'home' && prev !== 'home') {
+    deselect();
+  }
+  if (mode === 'above') { deselect(); startAbove(); }
   if (mode !== 'kessler' && kessler.count === 0) globe.ringsData([]);
+  updateSatMarker();
   renderPanel();
   restyle();
 }
@@ -313,17 +375,19 @@ function renderPanel() {
 function homePanel() {
   const debris = state.sats.filter((s) => s.cat === 'debris').length;
   return `
-    <span class="tag" style="--c:var(--accent)">Live right now</span>
-    <h2>${fmt(state.sats.length)} human-made objects are circling Earth at this moment.</h2>
-    <p>Every dot is real. Each one is tracked by radar and published as orbital data by CelesTrak. Your browser predicts where each one is, second by second, using the SGP4 orbit model.</p>
-    <div class="callout" style="--c:var(--danger)"><b>${fmt(debris)}</b> of them are tracked <b>debris</b>: fragments of satellites that were smashed apart. Each piece travels at about 27,000 km/h, more than 7 km every second.</div>
-    <h3>Explore</h3>
-    <div class="btn-col">
-      <button class="btn primary" data-act="above">🔭 What's flying above me right now?</button>
-      <button class="btn" data-act="iss">🛰️ Follow the International Space Station</button>
-      <button class="btn" data-act="kessler">💥 What happens if two satellites collide?</button>
+    <span class="tag" style="--c:var(--danger)">● Live</span>
+    <h2>${fmt(state.sats.length)} objects are orbiting Earth right now</h2>
+    <p>Every dot is real. Click any dot to zoom in on it.</p>
+    <div class="stats">
+      <div class="stat"><div class="k">Satellites</div><div class="v">${fmt(state.sats.length - debris)}</div></div>
+      <div class="stat"><div class="k">Space junk</div><div class="v" style="color:var(--danger)">${fmt(debris)}</div></div>
     </div>
-    <p class="muted small">Tip: drag to spin the Earth, scroll to zoom, click any dot to inspect it. Use the time controls below to fast-forward.</p>`;
+    <div class="btn-col">
+      <button class="action" data-act="above"><span class="ico">🔭</span><span><b>What's above me?</b><small>See what's flying over your head</small></span></button>
+      <button class="action" data-act="iss"><span class="ico">🧑‍🚀</span><span><b>Follow the ISS</b><small>Ride along with the space station</small></span></button>
+      <button class="action" data-act="kessler"><span class="ico">💥</span><span><b>Crash two satellites</b><small>Watch space junk spread</small></span></button>
+    </div>
+    <p class="muted small">Drag to spin · scroll to zoom · speed up time below</p>`;
 }
 
 function satPanel() {
@@ -334,46 +398,69 @@ function satPanel() {
   const pv = stateAt(state.selectedRec, new Date(state.simTime));
   const speed = pv ? Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z) * 3600 : null;
   const lost = state.destroyed.has(i);
+  const sub = [s.info.launchYear && `${s.cat === 'debris' ? 'From a launch in' : 'Launched'} ${s.info.launchYear}`, orbitRegime(s.info.periodMin)].filter(Boolean).join(' · ');
   return `
+    <button class="back" data-act="close">← Back to Earth</button>
     <span class="tag" style="--c:${c.color}">${c.label}</span>
-    <h2>${esc(s.name)}</h2>
+    <div>
+      <h2>${esc(s.name)}</h2>
+      <p class="muted small">${sub}</p>
+    </div>
     ${lost ? '<div class="callout" style="--c:var(--danger)">💥 Destroyed in the collision simulation.</div>' : ''}
     <div class="stats">
-      <div class="stat"><div class="k">Altitude</div><div class="v" id="live-alt">${g ? fmt(g.alt) + ' km' : '–'}</div></div>
+      <div class="stat"><div class="k">Height</div><div class="v" id="live-alt">${g ? fmt(g.alt) + ' km' : '–'}</div></div>
       <div class="stat"><div class="k">Speed</div><div class="v" id="live-speed">${speed ? fmt(speed) + ' km/h' : '–'}</div></div>
-      <div class="stat"><div class="k">Latitude</div><div class="v" id="live-lat">${g ? fmt(g.lat, 2) + '°' : '–'}</div></div>
-      <div class="stat"><div class="k">Longitude</div><div class="v" id="live-lng">${g ? fmt(g.lng, 2) + '°' : '–'}</div></div>
-      <div class="stat"><div class="k">One orbit</div><div class="v">${fmt(s.info.periodMin, 0)} min</div></div>
-      <div class="stat"><div class="k">Inclination</div><div class="v">${fmt(s.info.inclination, 1)}°</div></div>
-      <div class="stat"><div class="k">NORAD ID</div><div class="v">${s.info.norad}</div></div>
-      <div class="stat"><div class="k">${s.cat === 'debris' ? 'Parent launched' : 'Launched'}</div><div class="v">${s.info.launchYear ?? '–'}</div></div>
-      <div class="stat wide"><div class="k">Orbit type</div><div class="v" style="font-size:15px">${orbitRegime(s.info.periodMin)}</div></div>
+      <div class="stat"><div class="k">One lap of Earth</div><div class="v">${fmtPeriod(s.info.periodMin)}</div></div>
+      <div class="stat"><div class="k">Laps per day</div><div class="v">${fmt(1440 / s.info.periodMin, 1)}</div></div>
     </div>
     <div class="callout">${funFact(s)}</div>
     <div class="btn-row">
-      <button class="btn" data-act="follow">${state.follow ? '⏹ Stop following' : '🎥 Follow'}</button>
-      ${lost ? '' : '<button class="btn danger" data-act="smash">💥 Simulate a collision here</button>'}
-      <button class="btn" data-act="close">✕ Close</button>
-    </div>`;
+      <button class="btn" data-act="follow" id="follow-btn">${followLabel()}</button>
+      ${lost ? '' : '<button class="btn danger" data-act="smash">💥 Crash it</button>'}
+    </div>
+    <details>
+      <summary>More details</summary>
+      <div class="kv">
+        <span>Position</span><span id="live-pos">${g ? `${fmt(g.lat, 2)}°, ${fmt(g.lng, 2)}°` : '–'}</span>
+        <span>Orbit tilt</span><span>${fmt(s.info.inclination, 1)}°</span>
+        <span>NORAD ID</span><span>${s.info.norad}</span>
+      </div>
+    </details>
+    <p class="muted small">Press Esc or “Back to Earth” to zoom out.</p>`;
+}
+
+function fmtPeriod(min) {
+  return min < 120 ? `${fmt(min)} min` : min < 2880 ? `${fmt(min / 60, 1)} hrs` : `${fmt(min / 1440, 1)} days`;
+}
+
+function followLabel() {
+  return state.follow ? '🎥 Following' : '🎯 Re-center';
+}
+
+function refreshFollowButton() {
+  const b = $('follow-btn');
+  if (b) { b.textContent = followLabel(); b.classList.toggle('on', state.follow); }
 }
 
 function funFact(s) {
   const n = s.name.toUpperCase();
   if (n.includes('COSMOS 2251 DEB') || n.includes('IRIDIUM 33 DEB'))
-    return '🧨 A piece of the <b>2009 Iridium 33 / Cosmos 2251 collision</b>, the first time two whole satellites ever crashed into each other. It created about 2,300 trackable fragments.';
+    return '🧨 Junk from the <b>2009 crash</b> between two satellites, Iridium 33 and Cosmos 2251: the first time two satellites ever collided.';
   if (n.includes('FENGYUN 1C DEB'))
-    return "🧨 A piece of China's <b>Fengyun-1C</b> weather satellite, destroyed by an anti-satellite missile test in 2007. It made more than 3,500 fragments, the worst debris event in history.";
+    return "🧨 Junk from China's <b>Fengyun-1C</b> weather satellite, blown up by a missile test in 2007. It's the worst debris event in history.";
   if (n.includes('COSMOS 1408 DEB'))
-    return '🧨 A piece of <b>Cosmos 1408</b>, destroyed by a Russian anti-satellite test in 2021. The ISS crew had to shelter in their spacecraft.';
+    return '🧨 Junk from <b>Cosmos 1408</b>, blown up by a missile test in 2021. The ISS crew had to take shelter.';
   if (s.cat === 'station')
-    return `🧑‍🚀 People live up here! It circles the Earth <b>${fmt(1440 / s.info.periodMin, 1)} times a day</b>, so the crew sees about ${Math.round(1440 / s.info.periodMin) * 2} sunrises and sunsets daily.`;
+    return `🧑‍🚀 <b>People live up here!</b> The crew sees about ${Math.round(1440 / s.info.periodMin) * 2} sunrises and sunsets every day.`;
   if (s.cat === 'starlink')
-    return '📡 Part of SpaceX\'s Starlink internet constellation, the biggest group of satellites ever launched. That\'s why the blue shell around Earth is so dense.';
+    return '📡 One of SpaceX\'s Starlink internet satellites. There are so many that they make the blue shell around Earth.';
   if (s.cat === 'nav')
-    return '🧭 A navigation satellite. Your phone\'s GPS works by timing signals from 4 or more satellites like this one.';
+    return '🧭 A navigation satellite. Your phone\'s GPS uses signals from 4 or more of these to find where you are.';
   if (s.info.periodMin > 1400 && s.info.periodMin < 1480)
-    return '🛰️ Geostationary: it orbits once per day, so it seems to hover over one spot. That\'s why satellite dishes can point at a fixed spot in the sky.';
-  return `🌍 It goes around the Earth <b>${fmt(1440 / s.info.periodMin, 1)} times a day</b>.`;
+    return '🛰️ It orbits once a day, at the same speed Earth spins, so it seems to hover over one spot. That\'s why satellite dishes never move.';
+  if (s.cat === 'debris')
+    return '🧨 A piece of space junk. Even a small piece hits as hard as a bullet at this speed.';
+  return `🌍 It circles the Earth <b>${fmt(1440 / s.info.periodMin, 1)} times a day</b>.`;
 }
 
 // --- Above me ----------------------------------------------------------------
@@ -391,7 +478,7 @@ function startAbove() {
 function requestLocation() {
   if (!navigator.geolocation) return;
   navigator.geolocation.getCurrentPosition(
-    (p) => setObserver(p.coords.latitude, p.coords.longitude, 'your location'),
+    (p) => setObserver(p.coords.latitude, p.coords.longitude, 'Your location'),
     () => {},
     { timeout: 8000 },
   );
@@ -403,11 +490,12 @@ function setObserver(lat, lng, label) {
   showObserver();
   computeAbove();
   computePasses();
+  if (state.mode === 'above') renderPanel();
 }
 
 function showObserver() {
   const { lat, lng } = state.observer;
-  globe.htmlElementsData([{ lat, lng }]);
+  updateSatMarker();
   controls.autoRotate = false;
   globe.pointOfView({ lat, lng, altitude: 1.9 }, 1500);
 }
@@ -433,35 +521,57 @@ function computePasses() {
   passes = predictPasses(rec, state.observer.geo, new Date(state.simTime), { hours: 96, max: 8 });
 }
 
+const passTime = (d) => d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+
+function aboveChips() {
+  const byCat = {};
+  for (const x of state.aboveList || []) byCat[state.sats[x.i].cat] = (byCat[state.sats[x.i].cat] || 0) + 1;
+  return Object.entries(byCat).map(([k, n]) => `<span class="tag" style="--c:${CATEGORIES[k].color}">${fmt(n)} ${CATEGORIES[k].label}</span>`).join('');
+}
+
+function aboveTopList() {
+  return (state.aboveList || []).slice(0, 5).map((x) => `
+    <li class="click" data-sel="${x.i}"><span class="dot" style="--c:${CATEGORIES[state.sats[x.i].cat].color}"></span>
+    <span class="name">${esc(state.sats[x.i].name)}</span><span class="meta">${Math.round(x.el)}° up · ${compass(x.az)}</span></li>`).join('');
+}
+
 function abovePanel() {
   if (!state.observer) return '<p>Finding your location…</p>';
-  const list = state.aboveList || [];
-  const byCat = {};
-  for (const x of list) byCat[state.sats[x.i].cat] = (byCat[state.sats[x.i].cat] || 0) + 1;
-  const timeFmt = { weekday: 'short', hour: 'numeric', minute: '2-digit' };
-  const visible = (passes || []).filter((p) => p.visible);
-  const issRows = (passes || []).slice(0, 6).map((p) => `
-      <li>
-        <span class="name">${p.start.toLocaleString(undefined, timeFmt)}</span>
-        <span class="meta">${Math.round((p.end - p.start) / 60000) + 1} min · ${Math.round(p.maxEl)}° · ${compass(p.startAz)}→${compass(p.endAz)}</span>
-        ${p.visible ? '<span class="badge">👀 visible</span>' : ''}
-      </li>`).join('');
+  const visible = (passes || []).find((p) => p.visible);
+  const issCard = visible
+    ? `<div class="hero-card">
+        <div class="k">👀 Next time you can see the ISS</div>
+        <div class="v">${passTime(visible.start)}</div>
+        <p>Look <b>${compass(visible.startAz)}</b>. It rises to <b>${Math.round(visible.maxEl)}°</b> and is visible for about ${Math.round((visible.end - visible.start) / 60000) + 1} minutes. It looks like a bright star moving steadily, with no blinking.</p>
+      </div>`
+    : '<div class="callout">No naked-eye ISS passes in the next 4 days. It needs your sky to be dark while the ISS is still in sunlight.</div>';
+  const passRows = (passes || []).slice(0, 6).map((p) => `
+      <li><span class="name">${passTime(p.start)}</span>
+      <span class="meta">${Math.round(p.maxEl)}° · ${compass(p.startAz)}→${compass(p.endAz)}</span>
+      ${p.visible ? '<span class="badge">👀 visible</span>' : ''}</li>`).join('');
   return `
     <span class="tag" style="--c:var(--good)">📍 ${esc(state.observer.label)}</span>
-    <h2>Above your horizon right now</h2>
-    <div class="big-number good" id="above-count">${fmt(list.length)}</div>
-    <p>objects are in your sky at this moment. The bright dots are the ones you could point at.</p>
-    <div class="btn-row small">${Object.entries(byCat).map(([k, n]) => `<span class="tag" style="--c:${CATEGORIES[k].color}">${fmt(n)} ${CATEGORIES[k].label}</span>`).join('')}</div>
-    <h3>Highest in your sky</h3>
-    <ul class="list">${list.slice(0, 6).map((x) => `
-      <li class="click" data-sel="${x.i}"><span class="dot" style="--c:${CATEGORIES[state.sats[x.i].cat].color}"></span>
-      <span class="name">${esc(state.sats[x.i].name)}</span><span class="meta">${Math.round(x.el)}° up, ${compass(x.az)}</span></li>`).join('')}
-    </ul>
-    <h3>🛰️ Next ISS flyovers</h3>
-    ${visible.length ? `<div class="callout" style="--c:var(--gold)">Next one you can see with your own eyes: <b>${visible[0].start.toLocaleString(undefined, timeFmt)}</b>. Look ${compass(visible[0].startAz)}. It looks like a bright star moving steadily, with no blinking.</div>` : ''}
-    <ul class="list">${issRows || '<li class="muted">No passes in the next 4 days.</li>'}</ul>
-    <p class="muted small">“Visible” means the ISS is lit by the Sun while your sky is dark, so you can see it without a telescope. Degrees = how high above the horizon it gets.</p>
+    <h2>Above you right now</h2>
+    <div><span class="big-number good" id="above-count">${fmt(state.above.length)}</span> <span class="muted">objects in your sky</span></div>
+    <div class="chips" id="above-chips">${aboveChips()}</div>
+    <h3>Highest overhead</h3>
+    <ul class="list" id="above-list">${aboveTopList()}</ul>
+    <h3>🧑‍🚀 Spot the ISS</h3>
+    ${issCard}
+    <details>
+      <summary>All upcoming ISS flyovers</summary>
+      <ul class="list">${passRows || '<li class="muted">None in the next 4 days.</li>'}</ul>
+      <p class="muted small">Degrees = how high above the horizon it gets (90° is straight up).</p>
+    </details>
     <button class="btn" data-act="locate">📍 Use my exact location</button>`;
+}
+
+function refreshAbovePanel() {
+  if (!$('above-count')) return;
+  $('above-count').textContent = fmt(state.above.length);
+  $('above-chips').innerHTML = aboveChips();
+  $('above-list').innerHTML = aboveTopList();
+  $('above-list').querySelectorAll('[data-sel]').forEach((li) => { li.onclick = () => select(+li.dataset.sel); });
 }
 
 // --- Kessler ----------------------------------------------------------------
@@ -471,32 +581,35 @@ function kesslerPanel() {
   return `
     <span class="tag" style="--c:var(--danger)">Simulation</span>
     <h2>The Kessler Syndrome</h2>
-    <p>In 1978, NASA scientist Donald Kessler warned that if orbits get crowded enough, one collision could trigger a <b>chain reaction</b>. Debris smashes more satellites, which make more debris, until parts of space become unusable for generations.</p>
-    <div class="stats">
-      <div class="stat"><div class="k">Collisions</div><div class="v" id="k-coll">${kessler.collisions.length}</div></div>
-      <div class="stat"><div class="k">Fragments</div><div class="v" id="k-frag">${fmt(kessler.count)}</div></div>
-      <div class="stat wide"><div class="k">Simulated time since first impact</div><div class="v" id="k-time">${kesslerElapsed()}</div></div>
+    <p>One crash makes junk. The junk causes more crashes, and those make even more junk. Scientists worry this could make parts of space unusable.</p>
+    <div class="stats three">
+      <div class="stat"><div class="k">Crashes</div><div class="v" id="k-coll">${kessler.collisions.length}</div></div>
+      <div class="stat"><div class="k">Junk pieces</div><div class="v" id="k-frag">${fmt(kessler.count)}</div></div>
+      <div class="stat"><div class="k">Time</div><div class="v" id="k-time">${kesslerElapsed()}</div></div>
     </div>
     <div class="btn-col">
-      <button class="btn danger" data-act="smash">💥 ${target ? `Smash ${esc(target)}` : running ? 'Trigger another collision' : 'Trigger a collision'}</button>
-      <label class="toggle"><input type="checkbox" data-act="chain" ${state.chain ? 'checked' : ''}/> Allow chain reactions</label>
-      ${running ? '<button class="btn" data-act="reset">↺ Reset simulation</button>' : ''}
+      <button class="btn danger" data-act="smash">💥 ${target ? `Crash ${esc(target)}` : running ? 'Crash another one' : 'Start a crash'}</button>
+      <label class="toggle"><input type="checkbox" data-act="chain" ${state.chain ? 'checked' : ''}/> Let junk hit other satellites (chain reaction)</label>
+      ${running ? '<button class="btn" data-act="reset">↺ Reset</button>' : ''}
     </div>
-    <p class="muted small">Tip: click any satellite first to choose what gets hit. Speed up time to watch the debris spread into a ring around the planet.</p>
-    <h3>This has really happened</h3>
-    <ul class="list small">
-      <li><span class="name">2007 · Fengyun-1C missile test</span><span class="meta">3,500+ pieces</span></li>
-      <li><span class="name">2009 · Iridium 33 × Cosmos 2251</span><span class="meta">2,300+ pieces</span></li>
-      <li><span class="name">2021 · Cosmos 1408 missile test</span><span class="meta">1,500+ pieces</span></li>
-    </ul>
-    <p class="muted small">The red “Debris” dots on the globe are what's still left of these events today. This simulation speeds things up and exaggerates collision odds so you can see a cascade in minutes. A real one would take years or decades.</p>`;
+    <p class="muted small">Tip: click a satellite first to choose what gets hit.</p>
+    <details>
+      <summary>Has this happened for real?</summary>
+      <ul class="list small">
+        <li><span class="name">2007 · Fengyun-1C missile test</span><span class="meta">3,500+ pieces</span></li>
+        <li><span class="name">2009 · Iridium 33 × Cosmos 2251</span><span class="meta">2,300+ pieces</span></li>
+        <li><span class="name">2021 · Cosmos 1408 missile test</span><span class="meta">1,500+ pieces</span></li>
+      </ul>
+      <p class="muted small">The red dots on the globe are what's left of these events today.</p>
+    </details>
+    <p class="muted small">Sped up and exaggerated so you can see it happen. A real cascade would take years.</p>`;
 }
 
 let kesslerStart = null;
 function kesslerElapsed() {
   if (kesslerStart === null) return '–';
   const m = Math.max(0, (state.simTime - kesslerStart) / 60000);
-  return m < 120 ? `${Math.round(m)} min` : m < 2880 ? `${fmt(m / 60, 1)} hours` : `${fmt(m / 1440, 1)} days`;
+  return m < 120 ? `${Math.round(m)} min` : m < 2880 ? `${fmt(m / 60, 1)} h` : `${fmt(m / 1440, 1)} d`;
 }
 
 function smash(i) {
@@ -527,10 +640,11 @@ function startCollision() {
     i = starlinks[Math.floor(Math.random() * starlinks.length)];
   }
   if (i === undefined || !smash(i)) return;
+  const g = latLngAlt(i);
   if (state.mode !== 'kessler') setMode('kessler');
-  state.selected = null;
-  globe.pathsData([]);
-  restyle();
+  deselect();
+  // Pull back so the debris cloud is visible as it spreads.
+  if (g) globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: 2.4 }, 1200);
   if (state.speed < 60) setSpeed(60);
   renderPanel();
 }
@@ -576,8 +690,10 @@ function wirePanel(el) {
     const handler = {
       above: () => setMode('above'),
       kessler: () => setMode('kessler'),
-      iss: () => { const i = findSat(/^ISS \(ZARYA\)/); if (i >= 0) { select(i); state.follow = true; renderPanel(); } },
-      follow: () => { state.follow = !state.follow; controls.autoRotate = false; renderPanel(); },
+      iss: () => { const i = findSat(/^ISS \(ZARYA\)/); if (i >= 0) select(i); },
+      follow: () => {
+        if (state.follow) { state.follow = false; refreshFollowButton(); } else focusOn(state.selected);
+      },
       close: () => setMode('home'),
       smash: () => startCollision(),
       reset: () => { kessler.reset(); state.destroyed.clear(); kesslerStart = null; globe.ringsData([]); restyle(); renderPanel(); },
@@ -588,6 +704,7 @@ function wirePanel(el) {
     else b.onclick = handler;
   });
   el.querySelectorAll('[data-sel]').forEach((li) => { li.onclick = () => select(+li.dataset.sel); });
+  refreshFollowButton();
 }
 
 // --- Time controls -------------------------------------------------------------
@@ -599,7 +716,7 @@ document.querySelectorAll('#speeds [data-speed]').forEach((b) => { b.onclick = (
 $('now-btn').onclick = () => {
   state.simTime = Date.now();
   setSpeed(1);
-  if (state.mode === 'above') computePasses();
+  if (state.mode === 'above') { computePasses(); renderPanel(); }
 };
 
 // --- Main loop -----------------------------------------------------------------
@@ -622,9 +739,10 @@ function frame(now) {
     chainReaction(dtSim);
   }
 
-  if (state.follow && state.selected !== null) {
+  if (state.selected !== null) {
     const g = latLngAlt(state.selected);
-    if (g) globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: globe.pointOfView().altitude });
+    if (g && state.follow) globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: globe.pointOfView().altitude });
+    updateSatMarker();
   }
 
   if (now - lastUi > 500) {
@@ -646,8 +764,7 @@ function updateUi(now) {
     const pv = stateAt(state.selectedRec, t);
     if (g && $('live-alt')) {
       $('live-alt').textContent = `${fmt(g.alt)} km`;
-      $('live-lat').textContent = `${fmt(g.lat, 2)}°`;
-      $('live-lng').textContent = `${fmt(g.lng, 2)}°`;
+      $('live-pos').textContent = `${fmt(g.lat, 2)}°, ${fmt(g.lng, 2)}°`;
     }
     if (pv && $('live-speed')) $('live-speed').textContent = `${fmt(Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z) * 3600)} km/h`;
   }
@@ -656,12 +773,7 @@ function updateUi(now) {
   if (state.mode === 'above') {
     computeAbove();
     restyle();
-    if (now - (updateUi.lastAbovePanel || 0) > 3000) {
-      updateUi.lastAbovePanel = now;
-      renderPanel();
-    } else if ($('above-count')) {
-      $('above-count').textContent = fmt(state.above.length);
-    }
+    refreshAbovePanel();
   }
   if (state.mode === 'kessler' && $('k-frag')) {
     $('k-coll').textContent = kessler.collisions.length;
