@@ -126,7 +126,8 @@ export function sunElevationAt(obsGeo, date, sun = sunDirection(date)) {
 
 // Upcoming passes over an observer. "visible" = sat in sunlight while the
 // observer's sky is dark, i.e. you can actually see it with your eyes.
-export function predictPasses(satrec, obsGeo, start, { hours = 72, stepSec = 20, minEl = 10, max = 6 } = {}) {
+// vis* fields describe just that naked-eye part of the pass.
+export function predictPasses(satrec, obsGeo, start, { hours = 72, stepSec = 20, minEl = 10, max = 60 } = {}) {
   const passes = [];
   let cur = null;
   const end = start.getTime() + hours * 3600000;
@@ -142,7 +143,11 @@ export function predictPasses(satrec, obsGeo, start, { hours = 72, stepSec = 20,
       if (!cur) cur = { start: date, startAz: az, maxEl: el, maxAt: date, visible: false };
       if (el >= cur.maxEl) { cur.maxEl = el; cur.maxAt = date; }
       const sun = sunDirection(date);
-      if (isSunlit(pv.position, sun) && sunElevationAt(obsGeo, date, sun) < -6) cur.visible = true;
+      if (isSunlit(pv.position, sun) && sunElevationAt(obsGeo, date, sun) < -6) {
+        if (!cur.visible) Object.assign(cur, { visible: true, visStart: date, visStartAz: az, visMaxEl: el });
+        cur.visEnd = date;
+        cur.visMaxEl = Math.max(cur.visMaxEl, el);
+      }
       cur.end = date; cur.endAz = az;
     } else if (cur) {
       passes.push(cur);

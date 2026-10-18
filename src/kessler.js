@@ -1,10 +1,12 @@
 // Kessler syndrome simulation: a collision shatters a satellite into fragments.
 // Each fragment flies its own orbit (two-body gravity, integrated in ECI).
 // Fragments that drift close to other satellites can cause new collisions.
+import { eciToGeodetic } from 'satellite.js';
 import { MU, EARTH_RADIUS_KM, toGlobeXYZ } from './orbit.js';
 import { createPointLayer } from './pointLayer.js';
 
 const MAX_STEP_SEC = 5;
+const DEG = 180 / Math.PI;
 const REENTRY_ALT_KM = 120;
 
 export class KesslerSim {
@@ -17,9 +19,11 @@ export class KesslerSim {
     this.count = 0;
     this.collisions = [];
     this.reentered = 0;
+    this.full = false; // true once the fragment limit has been hit
   }
 
   reset() {
+    this.full = false;
     this.count = 0;
     this.collisions = [];
     this.reentered = 0;
@@ -29,6 +33,7 @@ export class KesslerSim {
   // r, v: ECI position (km) and velocity (km/s) of the object that broke up.
   explode(r, v, pieces) {
     const n = Math.min(pieces, this.capacity - this.count);
+    if (n < pieces) this.full = true;
     for (let k = 0; k < n; k++) {
       const i = this.count++;
       // Random direction, mostly small kicks with a long tail of fast pieces.
@@ -84,19 +89,12 @@ export class KesslerSim {
     this.age[i] = this.age[last];
   }
 
-  // Earth-fixed lat/lng/alt of fragment i.
+  // Earth-fixed lat/lng/alt of fragment i, using the same ellipsoid model as
+  // the satellites so fragments line up exactly with their parent orbit.
   latLngAlt(i, gmst) {
     const o = i * 3;
-    const c = Math.cos(gmst), s = Math.sin(gmst);
-    const x = this.r[o] * c + this.r[o + 1] * s;
-    const y = -this.r[o] * s + this.r[o + 1] * c;
-    const z = this.r[o + 2];
-    const d = Math.hypot(x, y, z);
-    return {
-      lat: (Math.asin(z / d) * 180) / Math.PI,
-      lng: (Math.atan2(y, x) * 180) / Math.PI,
-      alt: d - EARTH_RADIUS_KM,
-    };
+    const g = eciToGeodetic({ x: this.r[o], y: this.r[o + 1], z: this.r[o + 2] }, gmst);
+    return { lat: g.latitude * DEG, lng: g.longitude * DEG, alt: g.height };
   }
 
   redraw(gmst) {

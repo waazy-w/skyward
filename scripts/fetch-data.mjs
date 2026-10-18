@@ -1,7 +1,7 @@
 // Downloads the latest orbital elements (TLEs) from CelesTrak and saves them
 // as one compact JSON file the app loads. CelesTrak doesn't allow browser
 // requests (no CORS), so we fetch at build time instead.
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 
 const GROUPS = [
   { group: 'active', kind: 'sat' },
@@ -46,8 +46,11 @@ for (const { group, kind } of GROUPS) {
   }
 }
 
-if (all.length < 1000) {
-  console.error(`Only got ${all.length} objects; keeping the existing data file.`);
+// Keep the existing file if this download looks broken or partial.
+let previous = 0;
+try { previous = JSON.parse(await readFile(OUT, 'utf8')).sats.length; } catch { /* no previous file */ }
+if (all.length < 1000 || all.length < previous * 0.8) {
+  console.error(`Only got ${all.length} objects (previously ${previous}); keeping the existing data file.`);
   process.exit(process.env.CI ? 0 : 1);
 }
 

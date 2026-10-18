@@ -11,6 +11,10 @@ Built solo at **Hack the Skies 2026**.
 - **💥 Kessler Syndrome simulator:** smash any satellite and watch the fragments spread into a ring around the planet. Turn on chain reactions and debris starts hitting other satellites, cascading the way NASA's Donald Kessler warned about in 1978.
 - **Inspect anything:** click any dot to see its altitude, speed, orbit, launch year and its full orbit path. Debris from real events (Fengyun-1C, Iridium/Cosmos, Cosmos 1408) explains where it came from.
 - **Time machine:** pause, or fast-forward up to 1 hour per second.
+- **Cinematic crashes:** the camera swoops in on the target, a fireball, screen shake and explosion sound, then pulls back to follow the debris cloud as it wraps the planet.
+- **Filter by type:** click a category (e.g. Navigation) to see only that shell; the view zooms out to fit GPS (20,000 km) or geostationary (36,000 km) orbits.
+- **HD Earth:** streamed satellite imagery that sharpens smoothly as you zoom.
+- **Sound effects:** synthesized in the browser with the Web Audio API (toggle with 🔊).
 
 ## How it works
 
@@ -22,6 +26,7 @@ Built solo at **Hack the Skies 2026**.
 | Collision sim | Each fragment gets a random velocity kick (random direction, long-tailed size) and is integrated with two-body gravity (semi-implicit Euler). Fragments that re-enter the atmosphere are removed. Chain reactions sample fragments and check for nearby satellites (odds exaggerated so it's watchable) |
 | ISS passes | Look angles from the observer, Sun position (low-precision solar formula) plus an Earth-shadow test to decide naked-eye visibility |
 | Fresh data | A GitHub Action rebuilds and redeploys every 6 hours with new orbit data |
+| Smooth motion | Positions are extrapolated every frame between worker updates, and the followed object is computed exactly each frame |
 
 ## Run it locally
 

@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Skyward</title>
     <meta name="description" content="Every tracked satellite and piece of space junk, live on a 3D globe. See what's above you and what a Kessler cascade would do." />
+    <meta name="theme-color" content="#02040a" />
+    <meta property="og:title" content="Skyward" />
+    <meta property="og:description" content="See every satellite above you, live, and what happens if they collide." />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛰️</text></svg>" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" />
@@ -12,32 +15,34 @@
   </head>
   <body>
     <div id="globe"></div>
+    <div id="flash" aria-hidden="true"></div>
 
     <header class="topbar">
       <div class="brand">
-        <span class="logo">🛰️</span>
+        <span class="logo" aria-hidden="true">🛰️</span>
         <div>
           <h1>Skyward</h1>
           <p>See every satellite above you, live.</p>
         </div>
       </div>
       <div class="search">
-        <input id="search" type="search" placeholder="Search satellites… (try ISS, Hubble)" autocomplete="off" />
-        <ul id="search-results" hidden></ul>
+        <input id="search" type="search" placeholder="Search satellites… (try ISS, Hubble)" autocomplete="off" aria-label="Search satellites" />
+        <ul id="search-results" role="listbox" hidden></ul>
       </div>
-      <nav class="modes">
+      <nav class="modes" aria-label="Modes">
         <button data-mode="home" class="active">🌍 Overview</button>
         <button data-mode="above">🔭 Above me</button>
         <button data-mode="kessler">💥 Kessler</button>
       </nav>
+      <button id="sound-btn" class="icon-btn" aria-label="Turn sound off">🔊</button>
     </header>
 
     <aside id="legend" class="panel">
       <h3>Tracked objects</h3>
       <div id="total" class="total">–</div>
       <ul id="legend-list"></ul>
+      <p id="legend-hint" class="muted small"></p>
       <p id="data-age" class="muted small"></p>
-      <p class="muted small credit">Imagery © Esri, Maxar, Earthstar Geographics</p>
     </aside>
 
     <aside id="side" class="panel"></aside>
@@ -47,18 +52,19 @@
         <span id="live-badge" class="live">● LIVE</span>
         <span id="clock">–</span>
       </div>
-      <div class="speeds" id="speeds">
-        <button data-speed="0">⏸</button>
-        <button data-speed="1" class="active">1×</button>
-        <button data-speed="60">60×</button>
-        <button data-speed="600">600×</button>
-        <button data-speed="3600">1h/s</button>
+      <div class="speeds" id="speeds" role="group" aria-label="Time speed">
+        <button data-speed="0" aria-label="Pause" title="Pause">⏸</button>
+        <button data-speed="1" class="active" title="Real speed">1×</button>
+        <button data-speed="60" title="1 minute per second">60×</button>
+        <button data-speed="600" title="10 minutes per second">600×</button>
+        <button data-speed="3600" title="1 hour per second">1h/s</button>
         <button id="now-btn" title="Jump back to the real time">↺ Now</button>
       </div>
     </footer>
 
+    <p id="credit">Imagery © Esri, Maxar, Earthstar Geographics · Orbits: CelesTrak</p>
     <div id="tooltip" hidden></div>
-    <div id="toast"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
     <div id="loading">
       <div class="spinner"></div>
       <p id="loading-text">Loading orbits…</p>
