@@ -37,13 +37,6 @@ No server, no sign-up: it's a static site on GitHub Pages.
 
 Vite · three.js / globe.gl · satellite.js · Web Audio · GitHub Pages
 
-## Run it yourself
-
-```bash
-npm install
-npm run dev
-```
-
 ## Notes
 
 - Positions are accurate to a few km. Great for exploring, not for flying spacecraft.
