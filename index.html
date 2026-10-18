@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OrbitWatch</title>
+    <meta name="description" content="Every tracked satellite and piece of space junk, live on a 3D globe. See what's above you and what a Kessler cascade would do." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛰️</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="globe"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🛰️</span>
+        <div>
+          <h1>OrbitWatch</h1>
+          <p>Every tracked object in Earth orbit, live.</p>
+        </div>
+      </div>
+      <div class="search">
+        <input id="search" type="search" placeholder="Search satellites… (try ISS, Hubble)" autocomplete="off" />
+        <ul id="search-results" hidden></ul>
+      </div>
+      <nav class="modes">
+        <button data-mode="home" class="active">🌍 Overview</button>
+        <button data-mode="above">🔭 Above me</button>
+        <button data-mode="kessler">💥 Kessler</button>
+      </nav>
+    </header>
+
+    <aside id="legend" class="panel">
+      <h3>Tracked objects</h3>
+      <div id="total" class="total">–</div>
+      <ul id="legend-list"></ul>
+      <p id="data-age" class="muted small"></p>
+    </aside>
+
+    <aside id="side" class="panel"></aside>
+
+    <footer class="timebar panel">
+      <div class="clock">
+        <span id="live-badge" class="live">● LIVE</span>
+        <span id="clock">–</span>
+      </div>
+      <div class="speeds" id="speeds">
+        <button data-speed="0">⏸</button>
+        <button data-speed="1" class="active">1×</button>
+        <button data-speed="60">60×</button>
+        <button data-speed="600">600×</button>
+        <button data-speed="3600">1h/s</button>
+        <button id="now-btn" title="Jump back to the real time">↺ Now</button>
+      </div>
+    </footer>
+
+    <div id="tooltip" hidden></div>
+    <div id="loading">
+      <div class="spinner"></div>
+      <p id="loading-text">Loading orbits…</p>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
