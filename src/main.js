@@ -1376,12 +1376,12 @@ function frame(now) {
 
   if (now - lastUi > 500) {
     lastUi = now;
-    updateUi(now);
+    updateUi();
   }
   requestAnimationFrame(frame);
 }
 
-function updateUi(now) {
+function updateUi() {
   const t = new Date(state.simTime);
   $('clock').textContent = t.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   $('live-badge').textContent = state.live ? '● LIVE' : state.speed === 0 ? '⏸ PAUSED' : '⏩ SIMULATED';
