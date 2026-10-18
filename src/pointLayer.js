@@ -2,13 +2,21 @@
 // objects in a single draw call, with per-dot color and size.
 import * as THREE from 'three';
 
+// Shared by every point layer: direction to the Sun in globe coordinates.
+export const sunUniform = { value: new THREE.Vector3(1, 0, 0) };
+
 const vertexShader = `
   attribute vec3 color;
   attribute float size;
   uniform float pixelRatio;
+  uniform vec3 sunDir;
   varying vec3 vColor;
   void main() {
-    vColor = color;
+    // Inside Earth's (cylindrical) shadow? Then the object isn't lit: draw it dim.
+    // Big dots (the selected object) always stay bright.
+    float d = dot(position, sunDir);
+    bool shadow = d < 0.0 && length(position - d * sunDir) < 100.0 && size < 9.5;
+    vColor = shadow ? color * 0.38 : color;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_PointSize = clamp(size * pixelRatio * (600.0 / -mv.z), 0.0, 14.0 * pixelRatio);
     gl_Position = projectionMatrix * mv;
@@ -39,7 +47,7 @@ export function createPointLayer(capacity) {
   const material = new THREE.ShaderMaterial({
     vertexShader,
     fragmentShader,
-    uniforms: { pixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) } },
+    uniforms: { pixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) }, sunDir: sunUniform },
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
@@ -47,6 +55,7 @@ export function createPointLayer(capacity) {
 
   const points = new THREE.Points(geometry, material);
   points.frustumCulled = false;
+  points.renderOrder = 2; // after the night shade
   return { points, geometry, position, color, size };
 }
 

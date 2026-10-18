@@ -16,7 +16,10 @@ Built solo at **Hack the Skies 2026**.
 - **💥 Kessler syndrome simulator:** smash any satellite. The camera swoops in, a fireball and explosion, then it pulls back to follow the debris as it wraps the planet. With chain reactions on, junk starts hitting other satellites, the cascade NASA's Donald Kessler warned about in 1978.
 - **Real history:** the red dots are real debris from the 2007 Fengyun-1C missile test, the 2009 Iridium–Cosmos collision and the 2021 Cosmos 1408 test.
 - **Filter by type:** show only Starlink, GPS, space stations, other satellites or debris; the view zooms out to fit each orbit shell.
+- **Day and night, live:** the night side of Earth is shaded where it really is right now, and satellites inside Earth's shadow are drawn dim. The inspector tells you if an object is in sunlight or in shadow.
+- **Shareable links:** every object has its own link (e.g. [`#sat=25544`](https://waazy-w.github.io/skyward/#sat=25544) is the ISS). Search works by name or NORAD catalog number.
 - **Time machine:** pause, or fast-forward up to 1 hour per second.
+- **Keyboard shortcuts:** <kbd>/</kbd> search, <kbd>Space</kbd> pause, <kbd>1</kbd>–<kbd>3</kbd> switch tabs, <kbd>Esc</kbd> back.
 - **HD Earth, sound effects, works on phones.**
 
 ## Architecture
@@ -47,6 +50,8 @@ Everything runs in the browser. There is no backend: GitHub Pages serves static 
 **4. Smooth 60 fps.** The worker updates a few times per second. In between, every dot is extrapolated along its latest motion. The object the camera follows gets an exact SGP4 calculation every frame, so the follow-cam glides.
 
 **5. Rendering.** A custom GLSL shader draws all objects as glowing points in a **single draw call**. Clicking uses ray casting against the points, ignoring any that are hidden behind the Earth.
+
+**5b. Day, night and Earth's shadow.** Every frame the Sun's direction is computed (low-precision solar formula), rotated into the Earth-fixed frame with sidereal time, and passed to the GPU as one uniform. A shader on a thin shell over the globe shades the night side with a soft twilight band. The point shader runs the same cylindrical shadow test as the pass predictor for every object at once, so satellites in Earth's shadow dim on their own.
 
 **6. "Can I see it?"** For your location, the app scans the next 3–4 days in 20-second steps and computes **look angles** (azimuth and elevation). A pass counts as naked-eye visible when the satellite is **in sunlight** (outside Earth's cylindrical shadow, using a solar-position formula) while **your sky is dark** (Sun more than 6° below your horizon).
 

@@ -305,3 +305,8 @@ button:focus-visible, [role="button"]:focus-visible, [role="option"]:focus-visib
   #side { padding: 12px; }
   #side h2 { font-size: 20px; }
 }
+
+kbd {
+  font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 5px; border-radius: 4px;
+  border: 1px solid var(--border); background: rgba(255, 255, 255, 0.06); color: var(--text, #e6edf3);
+}

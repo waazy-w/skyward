@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import {
   CATEGORIES, classify, tleInfo, orbitRegime, makeSatrec, stateAt, eciToLatLngAlt,
   orbitPath, observerGeo, lookAnglesFromLatLngAlt, predictPasses, compass, gstime,
-  EARTH_RADIUS_KM, GLOBE_RADIUS, toGlobeXYZ,
+  EARTH_RADIUS_KM, GLOBE_RADIUS, toGlobeXYZ, isSunlit, sunDirection,
 } from './orbit.js';
+import { createNightShade, updateSun } from './daynight.js';
 import { createPointLayer, hexToRgb } from './pointLayer.js';
 import { KesslerSim } from './kessler.js';
 import { Flashes } from './fx.js';
@@ -160,6 +161,8 @@ const satLayer = createPointLayer(1);
 const kessler = new KesslerSim();
 globe.scene().add(kessler.layer.points);
 const flashes = new Flashes(globe.scene());
+createNightShade(globe.scene());
+if (import.meta.env.DEV) window.__skyward = { globe, state };
 
 // --- Load data -------------------------------------------------------------
 const worker = new Worker(new URL('./propagator.worker.js', import.meta.url), { type: 'module' });
@@ -258,9 +261,37 @@ worker.onmessage = ({ data }) => {
     if (!$('loading').classList.contains('done')) {
       $('loading').classList.add('done');
       renderPanel();
+      applyHash();
     }
   }
 };
+
+// --- Shareable links: #sat=25544 (NORAD ID), #above, #kessler -------------
+const noradOf = (i) => (state.sats[i].norad ??= parseInt(state.sats[i].l1.slice(2, 7), 10));
+
+function syncHash() {
+  const hash = state.mode === 'sat' && state.selected !== null ? `#sat=${noradOf(state.selected)}`
+    : state.mode === 'above' || state.mode === 'kessler' ? `#${state.mode}` : '';
+  if (hash !== location.hash) history.replaceState(null, '', hash || location.pathname + location.search);
+}
+
+function applyHash() {
+  const h = location.hash.slice(1);
+  const id = /^sat=(\d+)$/.exec(h)?.[1];
+  if (id) {
+    const i = state.sats.findIndex((_, k) => noradOf(k) === +id);
+    if (i >= 0) select(i);
+    else toast(`No object with NORAD ID ${esc(id)} in today's data.`);
+  } else if (h === 'above' || h === 'kessler') setMode(h);
+}
+window.addEventListener('hashchange', () => { if (state.geo) applyHash(); });
+
+function shareLink() {
+  const url = location.href;
+  const done = () => toast('🔗 Link copied. Anyone who opens it lands right here.');
+  if (navigator.share && matchMedia('(pointer: coarse)').matches) navigator.share({ title: document.title, url }).catch(() => {});
+  else navigator.clipboard?.writeText(url).then(done, () => toast(`Copy this link: ${esc(url)}`)) ?? toast(`Copy this link: ${esc(url)}`);
+}
 
 // --- Camera director ---------------------------------------------------------
 // One place that moves the camera while tracking something: it flies from the
@@ -460,8 +491,20 @@ window.addEventListener('pointermove', (e) => {
     tip.hidden = false;
   });
 });
+// Keyboard shortcuts (ignored while typing in the search box).
+let resumeSpeed = 1;
 window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea')) return;
+  const modes = { 1: 'home', 2: 'above', 3: 'kessler' };
   if (e.key === 'Escape' && state.mode === 'sat') setMode('home');
+  else if (e.key === '/') { e.preventDefault(); $('search').focus(); }
+  else if (modes[e.key] && !cinematic) { sfx.click(); setMode(modes[e.key]); }
+  else if (e.key === ' ' && !e.target.closest('button, [role="button"], summary')) {
+    e.preventDefault();
+    if (state.speed === 0) setSpeed(resumeSpeed);
+    else { resumeSpeed = state.speed; setSpeed(0); }
+    sfx.click();
+  }
 });
 
 // Coming back to the tab after a while: positions are stale, so resync.
@@ -491,6 +534,7 @@ function select(i) {
   updateOrbitPath();
   updateSatMarker();
   restyle();
+  syncHash();
 }
 
 // Fly the camera in close to the object, then keep following it.
@@ -569,10 +613,11 @@ function searchHits(query) {
   const q = query.trim().toUpperCase();
   if (q.length < 2) return null;
   const alias = SEARCH_ALIASES[q];
+  const id = /^\d+$/.test(q) ? +q : null; // NORAD catalog number
   const scored = [];
   for (let i = 0; i < state.sats.length; i++) {
     const n = state.sats[i].name.toUpperCase();
-    const score = n === alias ? 0 : n === q ? 1 : n.startsWith(q) ? 2 : n.includes(q) ? 3 : -1;
+    const score = n === alias || noradOf(i) === id ? 0 : n === q ? 1 : n.startsWith(q) ? 2 : n.includes(q) ? 3 : -1;
     if (score >= 0) scored.push([score, i]);
   }
   scored.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -634,6 +679,7 @@ function setMode(mode) {
   updateSatMarker();
   renderPanel();
   restyle();
+  syncHash();
 }
 
 function renderPanel() {
@@ -655,7 +701,7 @@ function homePanel() {
   return `
     <span id="time-tag">${timeTag()}</span>
     <h2>${fmt(state.sats.length)} objects are orbiting Earth ${state.live ? 'right now' : 'at this moment'}</h2>
-    <p>Every dot is real. Click any dot to zoom in on it.</p>
+    <p>Every dot is real. Dim ones are in Earth's shadow. Click any dot to zoom in on it.</p>
     <div class="stats">
       <div class="stat"><div class="k">Satellites</div><div class="v">${fmt(state.sats.length - debris)}</div></div>
       <div class="stat"><div class="k">Space junk</div><div class="v" style="color:var(--danger)">${fmt(debris)}</div></div>
@@ -665,7 +711,7 @@ function homePanel() {
       ${issIndex >= 0 ? '<button class="action" data-act="iss"><span class="ico">🧑‍🚀</span><span><b>Follow the ISS</b><small>Ride along with the space station</small></span></button>' : ''}
       <button class="action" data-act="kessler"><span class="ico">💥</span><span><b>Smash a satellite</b><small>Watch the space junk spread</small></span></button>
     </div>
-    <p class="muted small">Drag to spin · scroll to zoom · speed up time below</p>`;
+    <p class="muted small">Drag to spin · scroll to zoom · speed up time below${matchMedia('(pointer: fine)').matches ? '<br>Keys: <kbd>/</kbd> search · <kbd>Space</kbd> pause · <kbd>1</kbd>–<kbd>3</kbd> tabs · <kbd>Esc</kbd> back' : ''}</p>`;
 }
 
 function satPanel() {
@@ -682,7 +728,7 @@ function satPanel() {
     <span class="tag" style="--c:${c.color}">${c.label}</span>
     <div>
       <h2>${esc(s.name)}</h2>
-      <p class="muted small">${sub}</p>
+      <p class="muted small">${sub} · <span id="live-sun">${sunText(pv)}</span></p>
     </div>
     ${lost ? '<div class="callout" style="--c:var(--danger)">💥 Destroyed in the collision simulation.</div>' : ''}
     <div class="stats">
@@ -698,6 +744,7 @@ function satPanel() {
     <div class="btn-row">
       <button class="btn" data-act="follow" id="follow-btn">${followLabel()}</button>
       ${lost ? '' : '<button class="btn danger" data-act="smash">💥 Smash it</button>'}
+      <button class="btn" data-act="share" title="Copy a link to this object">🔗 Share</button>
     </div>
     <details>
       <summary>More details</summary>
@@ -708,6 +755,11 @@ function satPanel() {
       </div>
     </details>
     <p class="muted small">Press Esc or “Back to Earth” to zoom out.</p>`;
+}
+
+function sunText(pv) {
+  if (!pv) return '';
+  return isSunlit(pv.position, sunDirection(new Date(state.simTime))) ? '☀️ In sunlight' : "🌑 In Earth's shadow";
 }
 
 // --- Next naked-eye pass of the selected object, from the observer's spot ---
@@ -1168,6 +1220,7 @@ function wirePanel(el) {
       reset: () => resetKessler(),
       chain: () => { state.chain = b.checked; },
       locate: () => requestLocation(true),
+      share: () => shareLink(),
     }[act];
     if (act === 'chain') b.onchange = handler;
     else b.onclick = () => { sfx.click(); handler(); };
@@ -1232,6 +1285,7 @@ function frame(now) {
     worker.postMessage({ type: 'tick', time: state.simTime });
   }
 
+  updateSun(new Date(state.simTime));
   renderPositions();
   if (state.mode === 'kessler' && state.crashSite !== null) pinExact(state.crashSite, state.crashRec);
   else if (state.selected !== null) pinExact(state.selected, state.selectedRec);
@@ -1277,6 +1331,7 @@ function updateUi(now) {
       const v = Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z);
       $('live-speed').textContent = `${fmt(v, 2)} km/s`;
       $('live-speed-kmh').textContent = `${fmt(v * 3600)} km/h`;
+      $('live-sun').textContent = sunText(pv);
     }
     if ($('sat-pass')) {
       if (satPassesStale()) { computeSatPasses(); $('sat-pass').innerHTML = satPassCard(); }
