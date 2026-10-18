@@ -402,6 +402,7 @@ function setSolo(cat) {
   state.solo = cat;
   buildLegend();
   restyle();
+  if (state.selected !== null) updateOrbitPath();
   if (state.mode === 'above') { computeAbove(); refreshAbovePanel(); }
   if (state.mode !== 'home' || !state.geo) return;
   let altitude = OVERVIEW_POV.altitude;
@@ -553,21 +554,33 @@ function latLngAlt(i) {
 // The orbit line covers one lap from `pathFrom`; redraw when time leaves that window.
 let pathFrom = 0;
 let lastPathAt = 0;
+// The orbit line belongs to the selected object, or to the crash target while
+// the camera swoops in on it.
+function pathOwner() {
+  if (state.selected !== null) return [state.selected, state.selectedRec];
+  if (state.mode === 'kessler' && state.crashSite !== null) return [state.crashSite, state.crashRec];
+  return [null, null];
+}
+
 function updateOrbitPath() {
   lastPathAt = performance.now();
-  if (state.selected === null || !state.selectedRec || state.destroyed.has(state.selected)) {
+  // The line goes away with its object: destroyed, or filtered out of view.
+  const [i, rec] = pathOwner();
+  if (i === null || !rec || state.destroyed.has(i) || isHidden(state.sats[i].cat)) {
     globe.pathsData([]);
     return;
   }
-  const s = state.sats[state.selected];
+  const s = state.sats[i];
+  s.info ??= tleInfo(s.l1, s.l2);
   pathFrom = state.simTime;
-  const pts = orbitPath(state.selectedRec, new Date(state.simTime), s.info.periodMin);
+  const pts = orbitPath(rec, new Date(state.simTime), s.info.periodMin);
   globe.pathsData([{ pts, color: ['rgba(255,255,255,0.9)', 'rgba(90,200,250,0.15)'] }]);
 }
 
 function orbitPathStale() {
-  if (state.selected === null) return false;
-  const period = state.sats[state.selected].info.periodMin * 60000;
+  const [i] = pathOwner();
+  if (i === null || state.destroyed.has(i) || !state.sats[i].info) return false;
+  const period = state.sats[i].info.periodMin * 60000;
   return state.simTime < pathFrom || state.simTime > pathFrom + period * 0.5;
 }
 
@@ -586,7 +599,7 @@ function updateSatMarker() {
   // object's orbit, which the worker keeps computing).
   const crash = state.mode === 'kessler' && state.crashSite !== null;
   const i = crash ? state.crashSite : state.selected;
-  const g = i !== null && (crash || !state.destroyed.has(i)) ? renderedLatLngAlt(i) : null;
+  const g = i !== null && (crash || (!state.destroyed.has(i) && !isHidden(state.sats[i].cat))) ? renderedLatLngAlt(i) : null;
   if (g) {
     const hit = crash && state.destroyed.has(i);
     const name = crash ? (hit ? `💥 Debris from ${state.sats[i].name}` : `🎯 ${state.sats[i].name}`) : state.sats[i].name;
@@ -1072,6 +1085,7 @@ function smash(i, { chain = false } = {}) {
   const pieces = s.cat === 'station' ? 900 : s.cat === 'debris' ? 80 : 350;
   kessler.explode(pv.position, pv.velocity, pieces);
   state.destroyed.add(i);
+  if (i === state.selected || i === state.crashSite) updateOrbitPath();
   const g = eciToLatLngAlt(pv.position, gstime(date));
   kessler.collisions.push({ i, time: state.simTime });
   if (kesslerStart === null) kesslerStart = state.simTime;
@@ -1105,6 +1119,7 @@ function resetKessler() {
   state.crashRec = null;
   if (isFollowing('crash')) stopFollow();
   globe.ringsData([]);
+  updateOrbitPath();
   updateSatMarker();
   restyle();
   if (state.mode === 'kessler') renderPanel();
@@ -1121,6 +1136,7 @@ function cancelCinematic() {
   if (state.crashSite !== null && !state.destroyed.has(state.crashSite)) {
     state.crashSite = null;
     state.crashRec = null;
+    updateOrbitPath();
   }
 }
 
@@ -1140,6 +1156,7 @@ function startCollision() {
   deselect();
   state.crashSite = i;
   state.crashRec = makeSatrec(state.sats[i].l1, state.sats[i].l2);
+  updateOrbitPath(); // keep its orbit line until the moment it's hit
   if (!state.live) setSpeed(1);
   const token = (cinematic = { timers: [] });
   const later = (ms, fn) => token.timers.push(setTimeout(() => { if (cinematic === token) fn(); }, ms));
