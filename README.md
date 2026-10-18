@@ -12,7 +12,7 @@ Built solo for **Hack the Skies 2026**.
 
 - 🌍 **See all ~18,600 objects in orbit** on a 3D Earth, moving in real time.
 - 🔭 **Above me:** see what's over your head right now, and when you can spot the ISS with your own eyes.
-- 🛰️ **Click any dot** to fly to it and see its height, speed, orbit and next pass over you.
+- 🛰️ **Click any dot** to fly to it and see its height, speed, orbit, next pass over you, and its closest neighbour in space right now.
 - 💥 **Smash a satellite** and watch the debris spread around the planet and hit other satellites (the Kessler syndrome).
 - 📜 **See real space disasters:** light up what's left of the 2007 Fengyun-1C missile test, the 2009 Iridium–Cosmos crash and the 2021 Cosmos 1408 test.
 - ⏩ **Speed up time**, filter by type (Starlink, GPS, debris…) and share a link to any satellite.
@@ -50,7 +50,7 @@ No server, no sign-up: it's a static site on GitHub Pages.
 
 **7. "Can I see it?"** For your location, the app scans the next 3–4 days in 20-second steps and computes **look angles** (azimuth and elevation). A pass counts as naked-eye visible when the satellite is **in sunlight** (outside Earth's cylindrical shadow, using a solar-position formula) while **your sky is dark** (Sun more than 6° below your horizon).
 
-**8. Orbit facts.** Apogee and perigee come from Kepler's third law, $a = \sqrt[3]{\mu / n^2}$, with $r_{apo/peri} = a(1 \pm e)$, where $n$ is the mean motion and $e$ the eccentricity from the TLE.
+**8. Orbit facts.** Kepler's third law, $a = \sqrt[3]{\mu / n^2}$, gives the orbit's size from its mean motion $n$. Because Earth isn't a perfect sphere, the lowest and highest point shown are measured by running SGP4 across the next full lap, so they always agree with the live height. The closest neighbour is a nearest-point search over all 18,600 live positions.
 
 **9. Kessler simulator.** A crash spawns hundreds of fragments at the satellite's position and velocity, each with a random kick (random direction, long-tailed speed, mostly 20–300 m/s). Each fragment then follows **two-body gravity**, $\ddot{\vec r} = -\mu \vec r / |\vec r|^3$, integrated with semi-implicit Euler in 5-second steps (stable over many orbits). Fragments that drop below 120 km burn up. For chain reactions, random fragments are checked against the nearest satellite; a close pass can trigger a new break-up.
 

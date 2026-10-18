@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import {
   CATEGORIES, classify, tleInfo, orbitRegime, makeSatrec, stateAt, eciToLatLngAlt,
   orbitPath, observerGeo, lookAnglesFromLatLngAlt, predictPasses, compass, gstime,
-  EARTH_RADIUS_KM, GLOBE_RADIUS, toGlobeXYZ, isSunlit, sunDirection,
+  EARTH_RADIUS_KM, GLOBE_RADIUS, toGlobeXYZ, isSunlit, sunDirection, heightRange,
 } from './orbit.js';
 import { createNightShade, updateSun } from './daynight.js';
 import { createPointLayer, hexToRgb } from './pointLayer.js';
@@ -763,6 +763,7 @@ function satPanel() {
   const pv = stateAt(state.selectedRec, new Date(state.simTime));
   const speed = pv ? Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z) * 3600 : null;
   const lost = state.destroyed.has(i);
+  const range = heightRange(state.selectedRec, new Date(state.simTime), s.info.periodMin);
   const sub = [s.info.launchYear && `${s.cat === 'debris' ? 'From a launch in' : 'Launched'} ${s.info.launchYear}`, orbitRegime(s.info.periodMin)].filter(Boolean).join(' · ');
   return `
     <button class="back" data-act="close">← Back to Earth</button>
@@ -775,12 +776,13 @@ function satPanel() {
     <div class="stats">
       <div class="stat"><div class="k">Height now</div><div class="v" id="live-alt">${g ? fmt(g.alt) + ' km' : '–'}</div></div>
       <div class="stat"><div class="k">Speed</div><div class="v" id="live-speed">${speed ? fmt(speed / 3600, 2) + ' km/s' : '–'}</div><div class="sub" id="live-speed-kmh">${speed ? fmt(speed) + ' km/h' : ''}</div></div>
-      <div class="stat"><div class="k">Lowest point</div><div class="v">${fmt(s.info.perigeeKm)} km</div></div>
-      <div class="stat"><div class="k">Highest point</div><div class="v">${fmt(s.info.apogeeKm)} km</div></div>
+      <div class="stat"><div class="k">Lowest point</div><div class="v">${fmt(range?.lo ?? s.info.perigeeKm)} km</div></div>
+      <div class="stat"><div class="k">Highest point</div><div class="v">${fmt(range?.hi ?? s.info.apogeeKm)} km</div></div>
       <div class="stat"><div class="k">One lap of Earth</div><div class="v">${fmtPeriod(s.info.periodMin)}</div></div>
       <div class="stat"><div class="k">Laps per day</div><div class="v">${fmt(1440 / s.info.periodMin, 1)}</div></div>
     </div>
     ${lost ? '' : `<div id="sat-pass">${satPassCard()}</div>`}
+    ${lost ? '' : `<div id="neighbour" class="neighbour" role="button" tabindex="0">${neighbourText()}</div>`}
     <div class="callout">${funFact(s)}</div>
     <div class="btn-row">
       <button class="btn" data-act="follow" id="follow-btn">${followLabel()}</button>
@@ -833,6 +835,33 @@ function countdown(ms) {
   if (m < 60) return `in ${m} min`;
   const h = Math.floor(m / 60);
   return h < 48 ? `in ${h}h ${String(m % 60).padStart(2, '0')}m` : `in ${Math.round(h / 24)} days`;
+}
+
+// The nearest other object to the selected one right now (straight-line distance).
+let neighbour = null; // { i, km }
+function findNeighbour() {
+  const i = state.selected;
+  const pos = satLayer.position?.array;
+  neighbour = null;
+  if (i === null || !pos) return;
+  const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+  let best = Infinity;
+  for (let j = 0; j < state.sats.length; j++) {
+    if (j === i || state.destroyed.has(j)) continue;
+    const dx = pos[j * 3] - x, dy = pos[j * 3 + 1] - y, dz = pos[j * 3 + 2] - z;
+    if (pos[j * 3] === 0 && pos[j * 3 + 1] === 0 && pos[j * 3 + 2] === 0) continue; // no position
+    const d = dx * dx + dy * dy + dz * dz;
+    if (d < best) { best = d; neighbour = { i: j }; }
+  }
+  if (neighbour) neighbour.km = Math.sqrt(best) * (EARTH_RADIUS_KM / GLOBE_RADIUS);
+}
+
+function neighbourText() {
+  findNeighbour();
+  if (!neighbour) return '';
+  const n = state.sats[neighbour.i];
+  const dist = neighbour.km < 2 ? 'right next to it (docked or attached)' : `${fmt(neighbour.km)} km away`;
+  return `<span class="k">Closest neighbour right now</span><span><span class="dot" style="--c:${CATEGORIES[n.cat].color}"></span> <b>${esc(n.name)}</b> · ${dist}</span>`;
 }
 
 function satPassCard() {
@@ -1291,6 +1320,7 @@ function wirePanel(el) {
     if (act === 'chain') b.onchange = handler;
     else b.onclick = () => { sfx.click(); handler(); };
   });
+  if ($('neighbour')) activate($('neighbour'), () => { if (neighbour) { sfx.click(); select(neighbour.i); } });
   el.querySelectorAll('[data-sel]').forEach((li) => activate(li, () => select(+li.dataset.sel)));
   el.querySelectorAll('[data-event]').forEach((li) => activate(li, () => { sfx.click(); showEvent(li.dataset.event); }));
   refreshFollowButtons();
@@ -1394,6 +1424,7 @@ function updateUi() {
     if (g && $('live-alt')) {
       $('live-alt').textContent = `${fmt(g.alt)} km`;
       $('live-pos').textContent = `${fmt(g.lat, 2)}°, ${fmt(g.lng, 2)}°`;
+      if ($('neighbour')) $('neighbour').innerHTML = neighbourText();
     }
     if (pv && $('live-speed')) {
       const v = Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z);

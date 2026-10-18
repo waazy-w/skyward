@@ -94,6 +94,21 @@ export function orbitPath(satrec, date, periodMin, steps = 180) {
   return pts;
 }
 
+// Lowest and highest height above the ground over the next lap, from SGP4.
+// (Kepler's apogee/perigee assume a round Earth, so they can disagree with
+// the live height by a few km; this always matches it.)
+export function heightRange(satrec, date, periodMin, steps = 240) {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i <= steps; i++) {
+    const t = new Date(date.getTime() + (i / steps) * periodMin * 60000);
+    const pv = stateAt(satrec, t);
+    if (!pv) continue;
+    const h = eciToLatLngAlt(pv.position, gstime(t)).alt;
+    lo = Math.min(lo, h); hi = Math.max(hi, h);
+  }
+  return lo <= hi ? { lo, hi } : null;
+}
+
 // --- Observer ("what's above me") ---------------------------------------
 
 export function observerGeo(latDeg, lngDeg) {
