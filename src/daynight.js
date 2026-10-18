@@ -21,11 +21,16 @@ export function createNightShade(scene) {
       uniform vec3 sunDir;
       varying vec3 vN;
       void main() {
-        float a = smoothstep(0.06, -0.2, dot(vN, sunDir)) * 0.68;
-        gl_FragColor = vec4(0.0, 0.01, 0.04, a);
+        float a = smoothstep(0.1, -0.25, dot(vN, sunDir)) * 0.62;
+        gl_FragColor = vec4(0.0, 0.015, 0.05, a);
       }`,
     transparent: true,
     depthWrite: false,
+    // Don't depth-test against the Earth: the imagery tiles sit at almost the
+    // same height, and fighting them made the night side flicker in patches.
+    // Front faces only, so it just covers the visible half of the globe.
+    depthTest: false,
+    side: THREE.FrontSide,
   });
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(GLOBE_RADIUS * 1.001, 96, 64), material);
   mesh.renderOrder = 1; // after the Earth, before the dots
