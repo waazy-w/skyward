@@ -31,11 +31,18 @@ export function classify(name, kind) {
 export function tleInfo(l1, l2) {
   const yy = parseInt(l1.slice(9, 11), 10);
   const meanMotion = parseFloat(l2.slice(52, 63)); // revolutions per day
+  const ecc = parseFloat(`0.${l2.slice(26, 33).trim()}`);
+  // Kepler's third law: semi-major axis from the orbital period.
+  const n = (meanMotion * 2 * Math.PI) / 86400; // rad/s
+  const a = Math.cbrt(MU / (n * n)); // km
   return {
     norad: parseInt(l1.slice(2, 7), 10),
     launchYear: Number.isNaN(yy) ? null : yy < 57 ? 2000 + yy : 1900 + yy,
     inclination: parseFloat(l2.slice(8, 16)),
     periodMin: 1440 / meanMotion,
+    eccentricity: ecc,
+    apogeeKm: a * (1 + ecc) - EARTH_RADIUS_KM, // highest point of the orbit
+    perigeeKm: a * (1 - ecc) - EARTH_RADIUS_KM, // lowest point
   };
 }
 

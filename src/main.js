@@ -480,6 +480,7 @@ function select(i) {
   state.selected = i;
   state.selectedRec = makeSatrec(s.l1, s.l2);
   s.info ??= tleInfo(s.l1, s.l2);
+  satPasses = null;
   sfx.chime();
   if (state.mode === 'kessler') {
     renderPanel();
@@ -685,11 +686,14 @@ function satPanel() {
     </div>
     ${lost ? '<div class="callout" style="--c:var(--danger)">💥 Destroyed in the collision simulation.</div>' : ''}
     <div class="stats">
-      <div class="stat"><div class="k">Height</div><div class="v" id="live-alt">${g ? fmt(g.alt) + ' km' : '–'}</div></div>
-      <div class="stat"><div class="k">Speed</div><div class="v" id="live-speed">${speed ? fmt(speed) + ' km/h' : '–'}</div></div>
+      <div class="stat"><div class="k">Height now</div><div class="v" id="live-alt">${g ? fmt(g.alt) + ' km' : '–'}</div></div>
+      <div class="stat"><div class="k">Speed</div><div class="v" id="live-speed">${speed ? fmt(speed / 3600, 2) + ' km/s' : '–'}</div><div class="sub" id="live-speed-kmh">${speed ? fmt(speed) + ' km/h' : ''}</div></div>
+      <div class="stat"><div class="k">Lowest point</div><div class="v">${fmt(s.info.perigeeKm)} km</div></div>
+      <div class="stat"><div class="k">Highest point</div><div class="v">${fmt(s.info.apogeeKm)} km</div></div>
       <div class="stat"><div class="k">One lap of Earth</div><div class="v">${fmtPeriod(s.info.periodMin)}</div></div>
       <div class="stat"><div class="k">Laps per day</div><div class="v">${fmt(1440 / s.info.periodMin, 1)}</div></div>
     </div>
+    ${lost ? '' : `<div id="sat-pass">${satPassCard()}</div>`}
     <div class="callout">${funFact(s)}</div>
     <div class="btn-row">
       <button class="btn" data-act="follow" id="follow-btn">${followLabel()}</button>
@@ -704,6 +708,64 @@ function satPanel() {
       </div>
     </details>
     <p class="muted small">Press Esc or “Back to Earth” to zoom out.</p>`;
+}
+
+// --- Next naked-eye pass of the selected object, from the observer's spot ---
+let satPasses = null; // { forIndex, computedAt, obsKey, list, overhead }
+const observerOrDefault = () => state.observer ?? { ...DEFAULT_OBSERVER, geo: observerGeo(DEFAULT_OBSERVER.lat, DEFAULT_OBSERVER.lng) };
+
+function computeSatPasses() {
+  const i = state.selected;
+  if (i === null || !state.selectedRec) { satPasses = null; return; }
+  const obs = observerOrDefault();
+  const now = new Date(state.simTime);
+  const list = predictPasses(state.selectedRec, obs.geo, now, { hours: 72, max: 30 });
+  const g = latLngAlt(i);
+  const overhead = g ? lookAnglesFromLatLngAlt(obs.geo, g.lat, g.lng, g.alt).el > 0 : false;
+  satPasses = { forIndex: i, computedAt: state.simTime, obsKey: `${obs.lat},${obs.lng}`, list, overhead, label: obs.label };
+}
+
+function satPassesStale() {
+  if (state.selected === null) return false;
+  if (!satPasses || satPasses.forIndex !== state.selected) return true;
+  const obs = observerOrDefault();
+  if (satPasses.obsKey !== `${obs.lat},${obs.lng}`) return true;
+  const next = satPasses.list.find((p) => p.visible);
+  return state.simTime < satPasses.computedAt || (next && state.simTime > next.visEnd.getTime());
+}
+
+function countdown(ms) {
+  if (ms <= 0) return 'Up there right now!';
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `in ${m} min`;
+  const h = Math.floor(m / 60);
+  return h < 48 ? `in ${h}h ${String(m % 60).padStart(2, '0')}m` : `in ${Math.round(h / 24)} days`;
+}
+
+function satPassCard() {
+  if (!satPasses) computeSatPasses();
+  const s = state.sats[state.selected];
+  const where = `from ${esc(satPasses.label)}`;
+  const next = satPasses.list.find((p) => p.visible && p.visEnd.getTime() >= state.simTime);
+  if (next) {
+    // "Sunlit over a dark sky" only means naked-eye visible for big, low objects.
+    const high = s.info.perigeeKm > 2000;
+    const eye = s.cat === 'station';
+    const title = eye ? '👀 Next time you can see it' : high ? "🔭 Next time it's lit up in your night sky" : "✨ Next time it's lit up in your night sky";
+    const note = eye ? ' It looks like a bright, steady star gliding across the sky.'
+      : high ? " It's too far away to see with your eyes. You'd need a telescope."
+      : ' It may be too faint to spot without binoculars.';
+    return `<div class="hero-card">
+      <div class="k">${title} ${where}</div>
+      <div class="v" id="pass-countdown">${countdown(next.visStart - state.simTime)}</div>
+      <p>${passTime(next.visStart)} · look <b>${compass(next.visStartAz)}</b>, up to <b>${Math.round(next.visMaxEl)}°</b> high.${note}</p>
+    </div>`;
+  }
+  if (satPasses.list.length === 0 && satPasses.overhead)
+    return `<div class="callout">Always above the horizon ${where}, hovering in the same part of the sky. Far too faint to see without a telescope.</div>`;
+  if (satPasses.list.length === 0)
+    return `<div class="callout">Never rises above the horizon ${where} in the next 3 days. Its orbit doesn't pass over that part of the world.</div>`;
+  return `<div class="callout">It passes over ${where}, but only in daylight or while in Earth's shadow over the next 3 days, so you can't see it with your eyes.</div>`;
 }
 
 function fmtPeriod(min) {
@@ -753,7 +815,7 @@ let passes = null;
 
 function startAbove() {
   if (!state.observer) {
-    setObserver(DEFAULT_OBSERVER.lat, DEFAULT_OBSERVER.lng, DEFAULT_OBSERVER.label);
+    setObserver(DEFAULT_OBSERVER.lat, DEFAULT_OBSERVER.lng, DEFAULT_OBSERVER.label, true);
     requestLocation(false);
   } else {
     computeAbove();
@@ -769,13 +831,13 @@ function requestLocation(explicit = true) {
   }
   navigator.geolocation.getCurrentPosition(
     (p) => setObserver(p.coords.latitude, p.coords.longitude, 'Your location'),
-    () => toast(`📍 Location not available. Showing ${DEFAULT_OBSERVER.label} instead.`),
+    () => { if (explicit) toast(`📍 Location is blocked in your browser. Still showing ${DEFAULT_OBSERVER.label}.`); },
     { timeout: 8000 },
   );
 }
 
-function setObserver(lat, lng, label) {
-  state.observer = { lat, lng, label, geo: observerGeo(lat, lng) };
+function setObserver(lat, lng, label, isDefault = false) {
+  state.observer = { lat, lng, label, isDefault, geo: observerGeo(lat, lng) };
   passes = null;
   computeAbove();
   computePasses();
@@ -849,6 +911,7 @@ function abovePanel() {
       ${p.visible ? '<span class="badge">👀 visible</span>' : ''}</li>`).join('');
   return `
     <span class="tag" style="--c:var(--you)">📍 ${esc(state.observer.label)}</span>
+    ${state.observer.isDefault ? `<div class="callout" style="--c:var(--you)">Showing the sky over <b>${esc(DEFAULT_OBSERVER.label)}</b>, home of Hack the Skies. <button class="link" data-act="locate">Share your location</button> to see what's over you.</div>` : ''}
     <h2>Above you ${state.live ? 'right now' : 'at this moment'}</h2>
     <div><span class="big-number good" id="above-count">${fmt(state.above.length)}</span> <span class="muted">objects in your sky</span></div>
     <div class="chips" id="above-chips">${aboveChips()}</div>
@@ -1210,7 +1273,16 @@ function updateUi(now) {
       $('live-alt').textContent = `${fmt(g.alt)} km`;
       $('live-pos').textContent = `${fmt(g.lat, 2)}°, ${fmt(g.lng, 2)}°`;
     }
-    if (pv && $('live-speed')) $('live-speed').textContent = `${fmt(Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z) * 3600)} km/h`;
+    if (pv && $('live-speed')) {
+      const v = Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z);
+      $('live-speed').textContent = `${fmt(v, 2)} km/s`;
+      $('live-speed-kmh').textContent = `${fmt(v * 3600)} km/h`;
+    }
+    if ($('sat-pass')) {
+      if (satPassesStale()) { computeSatPasses(); $('sat-pass').innerHTML = satPassCard(); }
+      const next = satPasses.list.find((p) => p.visible && p.visEnd.getTime() >= state.simTime);
+      if (next && $('pass-countdown')) $('pass-countdown').textContent = countdown(next.visStart - state.simTime);
+    }
   }
   if (state.selected !== null && (orbitPathStale() || (state.speed > 1 && now - lastPathAt > 2000))) updateOrbitPath();
 
