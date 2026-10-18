@@ -31,6 +31,8 @@ const state = {
   observer: null,
   above: [], // indices above the observer's horizon
   chain: true,
+  crashSite: null, // index of the smashed object the camera tracks in Kessler mode
+  followCrash: false,
 };
 
 // --- Globe -------------------------------------------------------------------
@@ -53,6 +55,7 @@ const globe = new Globe($('globe'))
   .ringRepeatPeriod(600)
   .htmlElement((d) => (d.kind === 'sat' ? satMarker(d) : observerPin()))
   .htmlAltitude((d) => d.alt ?? 0.003)
+  .htmlTransitionDuration(0)
   .pointOfView({ lat: 25, lng: -60, altitude: 4.2 });
 
 function observerPin() {
@@ -127,6 +130,9 @@ function restyle() {
   if (!color) return;
   const aboveSet = state.mode === 'above' ? new Set(state.above) : null;
   const focused = state.mode === 'sat' && state.selected !== null;
+  // During a crash, fade everything else so the red junk stands out.
+  const crashView = state.mode === 'kessler' && kessler.count > 0;
+  document.body.classList.toggle('focused', focused || crashView);
   for (let i = 0; i < state.sats.length; i++) {
     const s = state.sats[i];
     let rgb = catRgb[s.cat];
@@ -134,6 +140,7 @@ function restyle() {
     if (state.hidden.has(s.cat) || state.destroyed.has(i)) sz = 0;
     else if (i === state.selected) { rgb = [1, 1, 1]; sz = 10; }
     else if (focused) { rgb = rgb.map((v) => v * 0.22); sz *= 0.8; }
+    else if (crashView) { rgb = rgb.map((v) => v * 0.3); sz *= 0.8; }
     else if (aboveSet) {
       if (aboveSet.has(i)) sz = Math.max(sz * 1.8, 3.5);
       else rgb = rgb.map((v) => v * 0.25);
@@ -200,6 +207,7 @@ window.addEventListener('pointerup', (e) => {
   if (moved > 5) {
     // Dragging the globe takes the camera back from the follow-cam.
     if (state.follow) { state.follow = false; refreshFollowButton(); }
+    if (state.followCrash) { state.followCrash = false; refreshCrashButton(); }
     return;
   }
   const i = pick(e.clientX, e.clientY);
@@ -289,10 +297,14 @@ function updateSatMarker() {
       observerDatum = { kind: 'obs', lat: state.observer.lat, lng: state.observer.lng };
     items.push(observerDatum);
   }
-  const i = state.selected;
-  const g = i !== null && !state.destroyed.has(i) ? latLngAlt(i) : null;
+  // In Kessler mode the marker rides with the debris cloud (the smashed
+  // object's orbit, which the worker keeps computing).
+  const crash = state.mode === 'kessler' && state.crashSite !== null;
+  const i = crash ? state.crashSite : state.selected;
+  const g = i !== null && (crash || !state.destroyed.has(i)) ? latLngAlt(i) : null;
   if (g) {
-    if (marker?.i !== i) marker = { kind: 'sat', i, name: state.sats[i].name };
+    const name = crash ? `💥 Debris from ${state.sats[i].name}` : state.sats[i].name;
+    if (marker?.i !== i || marker.name !== name) marker = { kind: 'sat', i, name };
     Object.assign(marker, { lat: g.lat, lng: g.lng, alt: g.alt / EARTH_RADIUS_KM });
     items.push(marker);
   } else {
@@ -346,9 +358,9 @@ document.querySelectorAll('.modes button').forEach((b) => { b.onclick = () => se
 function setMode(mode) {
   const prev = state.mode;
   state.mode = mode;
-  document.body.classList.toggle('focused', mode === 'sat');
   document.querySelectorAll('.modes button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
   if (mode !== 'sat') state.follow = false;
+  if (mode !== 'kessler') state.followCrash = false;
   if (prev === 'sat' && mode === 'home') {
     deselect();
     controls.autoRotate = true;
@@ -590,6 +602,7 @@ function kesslerPanel() {
     <div class="btn-col">
       <button class="btn danger" data-act="smash">💥 ${target ? `Crash ${esc(target)}` : running ? 'Crash another one' : 'Start a crash'}</button>
       <label class="toggle"><input type="checkbox" data-act="chain" ${state.chain ? 'checked' : ''}/> Let junk hit other satellites (chain reaction)</label>
+      ${state.crashSite !== null ? `<button class="btn" data-act="crashfollow" id="crash-follow-btn">${crashFollowLabel()}</button>` : ''}
       ${running ? '<button class="btn" data-act="reset">↺ Reset</button>' : ''}
     </div>
     <p class="muted small">Tip: click a satellite first to choose what gets hit.</p>
@@ -612,7 +625,40 @@ function kesslerElapsed() {
   return m < 120 ? `${Math.round(m)} min` : m < 2880 ? `${fmt(m / 60, 1)} h` : `${fmt(m / 1440, 1)} d`;
 }
 
-function smash(i) {
+function crashFollowLabel() {
+  return state.followCrash ? '🎥 Following the debris' : '🎯 Find the debris';
+}
+
+function refreshCrashButton() {
+  const b = $('crash-follow-btn');
+  if (b) { b.textContent = crashFollowLabel(); b.classList.toggle('on', state.followCrash); }
+}
+
+// Fly to the debris cloud, then keep the camera locked on it as it orbits.
+let crashFollowTimer = null;
+function focusCrash() {
+  const g = latLngAlt(state.crashSite);
+  if (!g) return;
+  controls.autoRotate = false;
+  state.followCrash = false;
+  clearTimeout(crashFollowTimer);
+  globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: g.alt / EARTH_RADIUS_KM + 0.9 }, FOCUS_FLY_MS);
+  crashFollowTimer = setTimeout(() => {
+    if (state.crashSite !== null && state.mode === 'kessler') { state.followCrash = true; refreshCrashButton(); }
+  }, FOCUS_FLY_MS + 50);
+  refreshCrashButton();
+}
+
+let toastTimer = null;
+function toast(html) {
+  const el = $('toast');
+  el.innerHTML = html;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+function smash(i, { chain = false } = {}) {
   const s = state.sats[i];
   const rec = makeSatrec(s.l1, s.l2);
   const date = new Date(state.simTime);
@@ -627,6 +673,7 @@ function smash(i) {
   const rings = globe.ringsData().slice(-6);
   globe.ringsData([...rings, { lat: g.lat, lng: g.lng, rgb: '255,120,80', radius: 8 }]);
   setTimeout(() => globe.ringsData(globe.ringsData().filter((r) => r.lat !== g.lat)), 4000);
+  if (chain) toast(`💥 <b>Chain reaction!</b> Junk hit ${esc(s.name)}. Crash #${kessler.collisions.length}`);
   restyle();
   return true;
 }
@@ -640,11 +687,12 @@ function startCollision() {
     i = starlinks[Math.floor(Math.random() * starlinks.length)];
   }
   if (i === undefined || !smash(i)) return;
-  const g = latLngAlt(i);
   if (state.mode !== 'kessler') setMode('kessler');
   deselect();
-  // Pull back so the debris cloud is visible as it spreads.
-  if (g) globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: 2.4 }, 1200);
+  state.crashSite = i;
+  toast(`💥 <b>${esc(state.sats[i].name)}</b> was destroyed. Following the debris…`);
+  focusCrash();
+  updateSatMarker();
   if (state.speed < 60) setSpeed(60);
   renderPanel();
 }
@@ -679,7 +727,7 @@ function chainReaction(dtSec) {
       if (d < bestD) { bestD = d; best = i; }
     }
     const km = Math.sqrt(bestD) * (EARTH_RADIUS_KM / GLOBE_RADIUS);
-    if (best >= 0 && km < HIT_KM && Math.random() < HIT_CHANCE) smash(best);
+    if (best >= 0 && km < HIT_KM && Math.random() < HIT_CHANCE) smash(best, { chain: true });
   }
 }
 
@@ -696,7 +744,14 @@ function wirePanel(el) {
       },
       close: () => setMode('home'),
       smash: () => startCollision(),
-      reset: () => { kessler.reset(); state.destroyed.clear(); kesslerStart = null; globe.ringsData([]); restyle(); renderPanel(); },
+      crashfollow: () => {
+        if (state.followCrash) { state.followCrash = false; refreshCrashButton(); } else focusCrash();
+      },
+      reset: () => {
+        kessler.reset(); state.destroyed.clear(); kesslerStart = null;
+        state.crashSite = null; state.followCrash = false; clearTimeout(crashFollowTimer);
+        globe.ringsData([]); updateSatMarker(); restyle(); renderPanel();
+      },
       chain: () => { state.chain = b.checked; },
       locate: () => requestLocation(),
     }[act];
@@ -705,6 +760,7 @@ function wirePanel(el) {
   });
   el.querySelectorAll('[data-sel]').forEach((li) => { li.onclick = () => select(+li.dataset.sel); });
   refreshFollowButton();
+  refreshCrashButton();
 }
 
 // --- Time controls -------------------------------------------------------------
@@ -742,8 +798,12 @@ function frame(now) {
   if (state.selected !== null) {
     const g = latLngAlt(state.selected);
     if (g && state.follow) globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: globe.pointOfView().altitude });
-    updateSatMarker();
   }
+  if (state.mode === 'kessler' && state.crashSite !== null) {
+    const g = latLngAlt(state.crashSite);
+    if (g && state.followCrash) globe.pointOfView({ lat: g.lat, lng: g.lng, altitude: globe.pointOfView().altitude });
+  }
+  if (state.selected !== null || state.crashSite !== null) updateSatMarker();
 
   if (now - lastUi > 500) {
     lastUi = now;

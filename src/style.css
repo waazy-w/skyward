@@ -192,6 +192,14 @@ body.focused #legend { opacity: 0; pointer-events: none; }
 }
 @keyframes marker-pulse { 50% { transform: translate(-50%, -50%) scale(1.25); opacity: 0.6; } }
 
+#toast {
+  position: fixed; top: 84px; left: 50%; transform: translate(-50%, -12px); z-index: 30;
+  padding: 10px 18px; border-radius: 999px; font-size: 14px; white-space: nowrap;
+  background: rgba(60, 10, 10, 0.92); border: 1px solid rgba(255, 107, 107, 0.6); box-shadow: 0 0 30px rgba(255, 107, 107, 0.35);
+  opacity: 0; pointer-events: none; transition: opacity 0.3s, transform 0.3s;
+}
+#toast.show { opacity: 1; transform: translate(-50%, 0); }
+
 /* --- Phones ------------------------------------------------------------ */
 @media (max-width: 860px) {
   .topbar { flex-wrap: wrap; gap: 8px; }
